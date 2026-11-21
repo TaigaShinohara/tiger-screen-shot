@@ -443,6 +443,30 @@ test.describe('capture', () => {
     expect(await tauri.unhandled()).toEqual([]);
   });
 
+  test('a screenshot crop warning stays out of another project', async ({ app, page, isDesktop, tauri }) => {
+    test.skip(!isDesktop, 'Taking a screenshot needs the desktop app');
+    test.skip(!(await canStoreBlobsInIndexedDb(page)), NO_BLOBS);
+    await openStored(app, page, [seedProject('capture_alpha', 'Alpha', true), seedProject('capture_beta', 'Beta')]);
+    await tauri.setResponse('abs_capture_devices', ONE_SIMULATOR);
+    await tauri.setResponse('__captureSize', { width: 1080, height: 1920 });
+
+    const view = await openCapture(page);
+    await frameCell(view, PHONE_ID).click();
+    await view.getByRole('button', { name: 'Take screenshot', exact: true }).click();
+    const cropWarning = view.getByText(/the edges of the screenshot are cut off/);
+    await expect(cropWarning).toBeVisible();
+
+    await view.getByRole('button', { name: 'Back to the editor', exact: true }).click();
+    await strip(page).getByRole('button', { name: 'New tab', exact: true }).click();
+    await app.waitForStartDialogReady();
+    await app.startDialog.getByText('Beta', { exact: true }).click();
+    await expect(strip(page).locator('[role="tab"][aria-selected="true"]')).toContainText('Beta');
+
+    await openCapture(page);
+    await expect(view.getByRole('button', { name: 'Record', exact: true })).toBeVisible();
+    await expect(cropWarning).toBeHidden();
+  });
+
   test('Record is off while a recording starts, and Stop stays on screen whatever frame is chosen', async ({ app, page, isDesktop, tauri }) => {
     test.skip(!isDesktop, 'Recording needs the desktop app');
     await openStored(app, page, [seedProject('capture_alpha', 'Alpha', true)]);

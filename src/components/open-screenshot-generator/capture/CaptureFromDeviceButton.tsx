@@ -45,7 +45,7 @@ export function CaptureFromDeviceButton({
     : noSimulator
       ? 'Virtual iPhones need a Mac with Xcode'
       : kind === 'recording'
-        ? `Open Capture to record your app on ${on}`
+        ? 'Open Capture on this recording frame'
         : `Take a screenshot of your app on ${on}`;
   const off = !desktop || noSimulator;
   const button = (
