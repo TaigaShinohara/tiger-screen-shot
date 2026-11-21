@@ -451,10 +451,9 @@ export function CaptureWorkspace({
 
   // ---- taking ---------------------------------------------------------------
   const [busy, setBusy] = useState<string | null>(null);
-  // About the last screenshot or recording: cleared when another device or
-  // frame is chosen, so it never describes a frame it is not about.
   const [note, setNote] = useState<string | null>(null);
-  useEffect(() => setNote(null), [runningKey]);
+  const projectIdOnCanvas = getProjectId();
+  useEffect(() => setNote(null), [projectIdOnCanvas, request?.nonce, runningKey]);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [workingKey, setWorkingKey] = useState<string | null>(null);
   const [pending, setPending] = useState<Map<string, string>>(() => new Map());
@@ -609,7 +608,7 @@ export function CaptureWorkspace({
         { ...frame, mediaId: id, width: probe.width, height: probe.height, duration: probe.duration },
         title
       );
-      if (outcome.placed && from.platform === 'android' && recorded - probe.duration > 1) {
+      if (outcome.placed && outcome.projectName === null && getProjectId() === projectId && from.platform === 'android' && recorded - probe.duration > 1) {
         setNote(
           `The recording is ${probe.duration.toFixed(1)} seconds long, not ${recorded.toFixed(1)}. Android records only while something on the screen moves, and nothing moved at the end.`
         );
