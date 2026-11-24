@@ -5,7 +5,7 @@ import path from 'node:path';
 const fixture = `
 import {getStoreCredentials,setAppStoreCredentials} from '@/lib/publish/credentials';
 import {readListing,readMeta,writeMeta,readReviews,writeReviews,readReviewMarks,updateReviewMarks,writeListing,readReviewReplyDraft,removeReviewReplyDraftIfSame} from '@/lib/growth/db';
-import {applyStoreListingDrafts,getKeywordTracking,trackStoreKeywords,untrackStoreKeyword,setStoreReviewDone,prepareStoreReviewReply,sendPreparedStoreReviewReply,getStoreListingDrafts,updateStoreListingDrafts} from '@/lib/growth/agentActions';
+import {applyStoreListingDrafts,getCompetitorTracking,setCompetitorCountries,getKeywordTracking,trackStoreKeywords,untrackStoreKeyword,setStoreReviewDone,prepareStoreReviewReply,sendPreparedStoreReviewReply,getStoreListingDrafts,updateStoreListingDrafts} from '@/lib/growth/agentActions';
 import {changeReviewReplyTemplate,listReviewReplyTemplates} from '@/lib/growth/agentTemplates';
 import {writeTags,writeTemplates} from '@/lib/growth/reviewInbox';
 import {changeReviewTag,listReviewTags,setStoreReviewTag} from '@/lib/growth/agentReviewTags';
@@ -45,6 +45,20 @@ window.runAgentFixture=async()=>{
  await writeTemplates([]);
  setAppStoreCredentials({issuerId:'fixture-issuer',keyId:'fixture-key',privateKey:'fixture-only'});
  await writeMeta('apps:list:fixture-issuer:fixture-key',[{id:'123456',name:'Fixture',bundleId:'test.fixture'}]);
+ await writeMeta('rivals:list:123456',{owner:'123456',rivals:[{id:'234',name:'Rival',developer:'Test',iconUrl:null,addedAt:1}],countries:['US']});
+ const rivalPlan=await setCompetitorCountries({appId:'123456',countries:['JP','GB']});
+ check((await getCompetitorTracking({appId:'123456'})).countries.join(',')==='US' && rivalPlan.laterChecksContactStores,'competitor preview is local');
+ let wrongRival=false;try{await setCompetitorCountries({appId:'123456',countries:['FR'],dryRun:false,confirmed:true,expectedPlan:rivalPlan.expectedPlan})}catch{wrongRival=true}
+ check(wrongRival,'competitor plan binds countries');
+ await writeMeta('rivals:list:123456',{owner:'123456',rivals:[],countries:['US']});
+ let staleRival=false;try{await setCompetitorCountries({appId:'123456',countries:['JP','GB'],dryRun:false,confirmed:true,expectedPlan:rivalPlan.expectedPlan})}catch{staleRival=true}
+ check(staleRival && (await getCompetitorTracking({appId:'123456'})).countries.join(',')==='US','changed competitor list is refused');
+ const rivalAgain=await setCompetitorCountries({appId:'123456',countries:['jp','GB','JP']});
+ await setCompetitorCountries({appId:'123456',countries:['jp','GB','JP'],dryRun:false,confirmed:true,expectedPlan:rivalAgain.expectedPlan});
+ check((await getCompetitorTracking({appId:'123456'})).countries.join(',')==='JP,GB','competitor countries saved');
+ await writeMeta('rivals:list:123456',{broken:true});
+ let brokenRival=false;try{await setCompetitorCountries({appId:'123456',countries:['US']})}catch{brokenRival=true}
+ check(brokenRival && (await readMeta('rivals:list:123456')).broken===true,'unreadable competitor list is preserved');
  const first=await trackStoreKeywords({appId:'123456',terms:[' Puzzle '],countries:['US']});
  check(first.dryRun===true && first.added[0]==='puzzle','keyword preview');
  check((await getKeywordTracking({appId:'123456'})).keywords.length===0,'preview wrote keywords');

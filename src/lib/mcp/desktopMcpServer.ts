@@ -43,7 +43,7 @@ import {
   storeOverview,
   storeReviews,
 } from '@/lib/growth/agentTools';
-import { applyStoreListingDrafts, getKeywordTracking, getStoreListingDrafts, prepareStoreReviewReply, sendPreparedStoreReviewReply, setStoreReviewDone, trackStoreKeywords, untrackStoreKeyword, updateStoreListingDrafts } from '@/lib/growth/agentActions';
+import { applyStoreListingDrafts, getCompetitorTracking, setCompetitorCountries, getKeywordTracking, getStoreListingDrafts, prepareStoreReviewReply, sendPreparedStoreReviewReply, setStoreReviewDone, trackStoreKeywords, untrackStoreKeyword, updateStoreListingDrafts } from '@/lib/growth/agentActions';
 import { changeReviewReplyTemplate, listReviewReplyTemplates } from '@/lib/growth/agentTemplates';
 import { changeReviewTag, listReviewTags, setStoreReviewTag } from '@/lib/growth/agentReviewTags';
 import type { AlignEdge, DistributeAxis } from '@/lib/elementGeometry';
@@ -3269,6 +3269,24 @@ const TOOLS: ToolDef[] = [
     },
     run: storeKeywords,
   }),
+  {
+    name: 'get_competitor_tracking',
+    description: "Read the locally saved competitor list and countries for a connected app. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { appId: { type: 'string' } }, required: ['appId'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can read competitor tracking."), isError: true };
+      return textResult(await getCompetitorTracking(args));
+    },
+  },
+  {
+    name: 'set_competitor_countries',
+    description: "Preview or change countries for an existing competitor list. Defaults to dryRun; applying requires confirmation and expectedPlan. Later scheduled checks may contact stores. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { appId: { type: 'string' }, countries: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['appId', 'countries'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can change competitor tracking."), isError: true };
+      return textResult(await setCompetitorCountries(args));
+    },
+  },
   ...storeTool({
     name: 'get_keyword_tracking',
     description: 'Read the tracked keywords, creation timestamps and countries for one connected App Store app. No network request is made.',
@@ -3874,6 +3892,7 @@ const READ_ONLY_TOOLS = new Set([
   'list_store_events',
   'list_store_keywords',
   'get_keyword_tracking',
+  'get_competitor_tracking',
   'get_store_listing_drafts',
 ]);
 
