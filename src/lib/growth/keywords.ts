@@ -68,6 +68,7 @@ const SEARCH_URL = 'https://itunes.apple.com/search';
 export type KeywordSource = 'typed' | 'store-page' | 'top-apps' | 'competitors' | 'ai';
 
 export interface TrackedKeyword {
+  id?: string;
   /** As normalizeTerm leaves it: lowercase, single spaces. */
   term: string;
   addedAt: number;

@@ -290,6 +290,7 @@ export async function storeReviews(args: {
     returned: Math.min(limit, matching.length),
     topics: Object.keys(REVIEW_TOPIC_LABELS),
     reviews: matching.slice(0, limit).map((review) => ({
+      id: review.id,
       date: reviewDay(review),
       rating: review.rating,
       // Google Play does not say where a reviewer is, only their language.

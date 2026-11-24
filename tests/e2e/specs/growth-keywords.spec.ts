@@ -406,6 +406,55 @@ test.describe('growth keywords', () => {
       await expect(change.locator('p').last()).toHaveText('offline,online');
       expect(await keywordSearches(store)).toEqual([]);
     });
+    test('the built-in agent previews and saves local listing drafts', async ({ app, page, isDesktop, tauri }) => {
+      test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
+      const store = await connect(page, isDesktop);
+      await app.goto();
+      await store.install();
+      await app.startBlankProject();
+      const view = await openGrowth(page);
+      await expect(view.getByRole('combobox', { name: 'App' })).toContainText('Ludo Wala: 3D & Action');
+      const args = { appId: String(YOUR_ID), changes: [{ locale: 'en-US', field: 'subtitle', after: 'A fresh subtitle' }] };
+      expect((await mcpCall(tauri, 'update_store_listing_drafts', { ...args, dryRun: false, confirmed: true }, false)).isError).toBe(true);
+      const preview = await mcpCall(tauri, 'update_store_listing_drafts', args, true);
+      expect(preview.isError, preview.text).toBe(false);
+      const plan = JSON.parse(preview.text);
+      expect(plan).toMatchObject({ dryRun: true, proposed: [{ locale: 'en-US', field: 'subtitle', after: 'A fresh subtitle' }] });
+      const applied = await mcpCall(tauri, 'update_store_listing_drafts', { ...args, dryRun: false, confirmed: true, expectedRevision: plan.expectedRevision }, true);
+      expect(applied.isError, applied.text).toBe(false);
+      expect(JSON.parse(applied.text).sentToStore).toBe(false);
+      await page.reload();
+      await app.waitForBoot();
+      const after = await mcpCall(tauri, 'get_store_listing_drafts', { appId: String(YOUR_ID) }, true);
+      expect(after.isError, after.text).toBe(false);
+      expect(JSON.parse(after.text).changes).toMatchObject([{ locale: 'en-US', field: 'subtitle', after: 'A fresh subtitle' }]);
+    });
+
+    test('the built-in agent previews and changes tracked keywords', async ({ app, page, isDesktop, tauri }) => {
+      test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
+      const store = await connect(page, isDesktop);
+      await app.goto();
+      await store.install();
+      await app.startBlankProject();
+      const view = await openGrowth(page);
+      await expect(view.getByRole('combobox', { name: 'App' })).toContainText('Ludo Wala: 3D & Action');
+      const input = { appId: String(YOUR_ID), terms: ['Fixture keyword'] };
+      expect((await mcpCall(tauri, 'track_store_keywords', { ...input, dryRun: false, confirmed: true }, false)).isError).toBe(true);
+      const preview = await mcpCall(tauri, 'track_store_keywords', input, true);
+      expect(preview.isError, preview.text).toBe(false);
+      expect(JSON.parse(preview.text)).toMatchObject({ dryRun: true, added: ['fixture keyword'] });
+      const write = await mcpCall(tauri, 'track_store_keywords', { ...input, dryRun: false, confirmed: true }, true);
+      expect(write.isError, write.text).toBe(false);
+      const list = await mcpCall(tauri, 'get_keyword_tracking', { appId: String(YOUR_ID) }, true);
+      expect(JSON.parse(list.text).keywords.some((item: { term: string }) => item.term === 'fixture keyword')).toBe(true);
+      const remove = await mcpCall(tauri, 'untrack_store_keyword', { appId: String(YOUR_ID), term: 'fixture keyword' }, true);
+      expect(remove.isError, remove.text).toBe(false);
+      const result = await mcpCall(tauri, 'untrack_store_keyword', { ...JSON.parse(remove.text), dryRun: false, confirmed: true }, true);
+      expect(result.isError, result.text).toBe(false);
+      const after = await mcpCall(tauri, 'get_keyword_tracking', { appId: String(YOUR_ID) }, true);
+      expect(JSON.parse(after.text).keywords.some((item: { term: string }) => item.term === 'fixture keyword')).toBe(false);
+    });
+
     test('the agents read the keyword ranks through the store tools, and other clients are refused', async ({ app, page, isDesktop, tauri }) => {
       const store = await connect(page, isDesktop);
       // Apple Ads' scores as popularityWatch.ts stores them: "offline" was asked about and has none.

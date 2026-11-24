@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { parseArgs } from '../../cli/src/args';
-import { requireToolConfirmation, validateSafetyFlags } from '../../cli/src/safetyFlags';
+import { confirmedToolArgs, requireToolConfirmation, validateSafetyFlags } from '../../cli/src/safetyFlags';
 import { run as edit } from '../../cli/src/commands/edit';
 import type { CommandContext } from '../../cli/src/context';
 
@@ -37,6 +37,8 @@ test('checks destructive tools before running any part of a batch', () => {
   assert.throws(() => requireToolConfirmation(['apply_template'], false), /--yes/);
   assert.doesNotThrow(() => requireToolConfirmation(['add_element'], false));
   assert.doesNotThrow(() => requireToolConfirmation(['delete_artboard'], true));
+  assert.deepEqual(confirmedToolArgs('delete_artboard', { artboardId: 'a1' }, true), { artboardId: 'a1', confirmed: true });
+  assert.deepEqual(confirmedToolArgs('get_artboard', { artboardId: 'a1' }, true), { artboardId: 'a1' });
 });
 
 test('refuses a destructive edit before starting the editor', async () => {

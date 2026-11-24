@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { summarizeOperation } from '@/lib/ai/operationLog';
+import { summarizeSyncStatus } from '@/lib/agentSyncStatus';
 import {
   WEB_LINKS_OFF,
   createSerialMcpRunner,
@@ -93,6 +94,39 @@ test('AI run summaries omit prompts, provider replies and error details', async 
   assert.deepEqual(JSON.parse(textOf(result)), [summary]);
   const invalid = await handleMcpMessage(call('list_ai_runs', { limit: 61 }), api);
   assert.equal((invalid as CallResult).result?.isError, true);
+});
+
+test('external clients cannot mutate Growth keywords', async () => {
+  const { api } = fakeApi();
+  for (const name of ['track_store_keywords', 'untrack_store_keyword', 'set_store_review_done', 'update_store_listing_drafts']) {
+    const result = await handleMcpMessage(call(name, { appId: '123', terms: ['test'], term: 'test', dryRun: false, confirmed: true }), api, { agent: false });
+    assert.equal((result as CallResult).result?.isError, true);
+  }
+});
+
+test('website and sync data are restricted to built-in agents', async () => {
+  const { api, calls } = fakeApi();
+  for (const name of ['get_website_draft', 'update_website_draft', 'get_project_sync_status', 'pause_project_account_sync']) {
+    const result = await handleMcpMessage(call(name, { projectId: 'p1', changes: { headline: 'Test' } }), api, { agent: false });
+    assert.equal((result as CallResult).result?.isError, true);
+  }
+  assert.equal(calls.length, 0);
+  const allowed = await handleMcpMessage(call('get_website_draft', { projectId: 'p1' }), api, { agent: true });
+  assert.notEqual((allowed as CallResult).result?.isError, true);
+  assert.deepEqual(calls, ['getWebsiteDraft']);
+});
+
+test('sync status excludes messages, remote records and secrets', () => {
+  const result = summarizeSyncStatus({
+    projectId: 'p1', accountConnected: true, accountProvider: 'github', accountEnabled: true,
+    accountStatus: { state: 'conflict', provider: 'github', savedAt: 0, message: 'private-token', conflict: { remoteId: 'private-id' } } as never,
+    cloudAvailable: true, cloudSignedIn: true, cloudEnabled: true,
+    cloudStatus: { state: 'paused', savedAt: null, message: 'private-key', conflict: { shareSlug: 'private-slug' }, pendingAssets: 2 } as never,
+  });
+  assert.equal(result.account.hasConflict, true);
+  assert.equal(result.cloud.pendingAssets, 2);
+  assert.equal(result.remoteChecked, false);
+  assert.equal(JSON.stringify(result).includes('private'), false);
 });
 
 // set_background writes its colours into a CSS gradient as given.
@@ -296,14 +330,14 @@ test('a template fill is probed only when it stays on this site', async () => {
     const { api } = fakeApi();
     for (const src of ['/\\x.example/s.png', '/\t/x.example/s.png']) {
       const answer = await handleMcpMessage(
-        call('apply_template', { templateId: 'template_droply', screenshots: [{ elementId: 'el_1', src }] }),
+        call('apply_template', { templateId: 'template_droply', screenshots: [{ elementId: 'el_1', src }], confirmed: true }),
         api
       );
       assert.match(textOf(answer), /is not a source the app can load/);
     }
     assert.deepEqual(probes, []);
     const onSite = await handleMcpMessage(
-      call('apply_template', { templateId: 'template_droply', screenshots: [{ elementId: 'el_1', src: '/devices/iphone.png' }] }),
+      call('apply_template', { templateId: 'template_droply', screenshots: [{ elementId: 'el_1', src: '/devices/iphone.png' }], confirmed: true }),
       api
     );
     assert.match(textOf(onSite), /is not an image this app serves/);
@@ -311,6 +345,16 @@ test('a template fill is probed only when it stays on this site', async () => {
   } finally {
     scope.Image = saved;
   }
+});
+
+test('MCP destructive design tools require confirmation', async () => {
+  const { api, calls } = fakeApi();
+  const denied = await handleMcpMessage(call('delete_element', { elementId: 'e1' }), api);
+  assert.equal((denied as CallResult).result?.isError, true);
+  assert.equal(calls.includes('deleteElement'), false);
+  const allowed = await handleMcpMessage(call('delete_element', { elementId: 'e1', confirmed: true }), api);
+  assert.notEqual((allowed as CallResult).result?.isError, true);
+  assert.equal(calls.includes('deleteElement'), true);
 });
 
 test('import_project_image is listed for every client and works only for the agent in the desktop app', async () => {

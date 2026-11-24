@@ -126,7 +126,16 @@ export async function writeSiteRow(draft: SiteDraft, chat: SiteChatItem[]): Prom
 }
 
 /** The Website view's hold on a project's site, while it has one: a change goes into its copy. */
-const holders = new Map<string, (change: SiteChange) => void>();
+const holders = new Map<string, SiteCopy>();
+
+export async function readCurrentSite(projectId: string): Promise<SiteRowData | null> {
+  const holder = holders.get(projectId);
+  if (!holder) return readSiteRow(projectId);
+  const current = holder.snapshot();
+  if (!current.loaded) throw new Error('The website is still loading. Try again shortly.');
+  if (current.readFailed) throw new Error('The website could not be read.');
+  return current.draft ? { draft: current.draft, chat: current.chat } : null;
+}
 
 /**
  * Change a project's site and conversation, wherever the site is: in the
@@ -138,7 +147,7 @@ const holders = new Map<string, (change: SiteChange) => void>();
 export async function changeSite(projectId: string, change: SiteChange): Promise<void> {
   const holder = holders.get(projectId);
   if (holder) {
-    holder(change);
+    holder.take(change);
     return;
   }
   await sites().transaction(async (tx) => {
@@ -146,6 +155,37 @@ export async function changeSite(projectId: string, change: SiteChange): Promise
     if (!row) return;
     const next = change({ draft: row.draft, chat: row.chat ?? [] });
     await tx.put(storedSite({ ...next.draft, updatedAt: Date.now() }, next.chat));
+  });
+}
+
+export async function changeCurrentSite<T>(projectId: string, change: (row: SiteRowData) => { row: SiteRowData; result: T; write: boolean }): Promise<T> {
+  const holder = holders.get(projectId);
+  if (holder) {
+    const current = holder.snapshot();
+    if (!current.loaded) throw new Error('The website is still loading. Try again shortly.');
+    if (current.readFailed) throw new Error('The website could not be read.');
+    if (!current.draft) throw new Error('This project has no website draft.');
+    let result!: T;
+    let needsSave = false;
+    holder.take((row) => {
+      const next = change(row);
+      result = next.result;
+      needsSave = next.write;
+      return next.write ? next.row : row;
+    });
+    if (needsSave) {
+      try { await holder.flushStrict(); }
+      catch { throw new Error('The website changed in the editor but could not be saved. Read it before retrying.'); }
+    }
+    return result;
+  }
+  return sites().transaction(async (tx) => {
+    const row = await tx.get(projectId);
+    if (holders.has(projectId)) throw new Error('The website opened while it was being changed. Try again.');
+    if (!row) throw new Error('This project has no website draft.');
+    const next = change({ draft: row.draft, chat: row.chat ?? [] });
+    if (next.write) await tx.put(storedSite({ ...next.row.draft, updatedAt: Date.now() }, next.row.chat));
+    return next.result;
   });
 }
 
@@ -165,6 +205,7 @@ export interface SiteSnapshot {
   projectId: string | null;
   /** False until the stored site of this project has been read. */
   loaded: boolean;
+  readFailed?: boolean;
   draft: SiteDraft | null;
   chat: SiteChatItem[];
 }
@@ -183,6 +224,7 @@ export class SiteCopy {
   private state: SiteSnapshot;
   private dirty = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private saveTail: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
   /** Changes from changeSite that came before the stored site was read. */
   private early: SiteChange[] = [];
@@ -216,7 +258,7 @@ export class SiteCopy {
     const projectId = this.projectId;
     if (!projectId || this.holding) return;
     this.holding = true;
-    holders.set(projectId, this.take);
+    holders.set(projectId, this);
     if (this.ready) return;
     void readSiteRow(projectId)
       .then((row) => {
@@ -229,7 +271,7 @@ export class SiteCopy {
         console.error('The website could not be read', error);
         if (!this.holding || this.ready) return;
         this.ready = true;
-        this.set({ ...this.state, loaded: true });
+        this.set({ ...this.state, loaded: true, readFailed: true });
       });
   }
 
@@ -238,7 +280,7 @@ export class SiteCopy {
     const projectId = this.projectId;
     if (!projectId) return Promise.resolve();
     this.holding = false;
-    if (holders.get(projectId) === this.take) holders.delete(projectId);
+    if (holders.get(projectId) === this) holders.delete(projectId);
     // Started before the changes below, so they read what it writes.
     const saved = this.flush();
     for (const change of this.early.splice(0)) void changeSite(projectId, change).catch((error) => console.error('The website could not be saved', error));
@@ -253,7 +295,9 @@ export class SiteCopy {
     }
     const { draft, chat } = this.state;
     if (!draft) return;
-    const next = change({ draft, chat });
+    const current = { draft, chat };
+    const next = change(current);
+    if (next === current) return;
     this.set({ ...this.state, draft: { ...next.draft, updatedAt: Date.now() }, chat: next.chat });
     this.schedule();
   };
@@ -273,7 +317,7 @@ export class SiteCopy {
   /** Start a site for the project, saved at once. */
   create = (draft: SiteDraft): void => {
     this.ready = true;
-    this.set({ ...this.state, loaded: true, draft });
+    this.set({ ...this.state, loaded: true, readFailed: false, draft });
     this.dirty = true;
     void this.flush();
   };
@@ -285,15 +329,24 @@ export class SiteCopy {
   }
 
   /** Write the site as it is now, when it changed since it was last written. */
-  flush = async (): Promise<void> => {
+  flushStrict = async (): Promise<void> => {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    const { draft, chat } = this.state;
-    if (!draft || !this.dirty) return;
-    this.dirty = false;
-    await writeSiteRow(draft, chat).catch((error) => console.error('The website could not be saved', error));
+    const save = this.saveTail.then(async () => {
+      const { draft, chat } = this.state;
+      if (!draft || !this.dirty) return;
+      this.dirty = false;
+      try { await writeSiteRow(draft, chat); }
+      catch (error) { this.dirty = true; throw error; }
+    });
+    this.saveTail = save.catch(() => {});
+    await save;
+  };
+
+  flush = async (): Promise<void> => {
+    await this.flushStrict().catch((error) => console.error('The website could not be saved', error));
   };
 }
 

@@ -1,5 +1,6 @@
 import { flagBool, flagString, type ParsedArgs } from './args.js';
 import { usageError } from './errors.js';
+import { DESTRUCTIVE_DESIGN_TOOLS } from '@/lib/mcp/toolSafety';
 
 export function validateSafetyFlags(args: ParsedArgs): void {
   const { command, flags, positionals } = args;
@@ -25,11 +26,13 @@ export function validateSafetyFlags(args: ParsedArgs): void {
   }
 }
 
-const DESTRUCTIVE_TOOLS = new Set(['delete_artboard', 'delete_element', 'delete_asset', 'remove_locales', 'reset_locale_overrides', 'apply_template']);
-
 export function requireToolConfirmation(tools: string[], confirmed: boolean): void {
-  const destructive = tools.filter((tool) => DESTRUCTIVE_TOOLS.has(tool));
+  const destructive = tools.filter((tool) => DESTRUCTIVE_DESIGN_TOOLS.has(tool));
   if (destructive.length && !confirmed) {
     throw usageError(`Destructive tool calls require --yes: ${destructive.join(', ')}.`, 'Review the target and pass --yes to run them.');
   }
+}
+
+export function confirmedToolArgs(tool: string, args: Record<string, unknown>, confirmed: boolean): Record<string, unknown> {
+  return confirmed && DESTRUCTIVE_DESIGN_TOOLS.has(tool) ? { ...args, confirmed: true } : args;
 }

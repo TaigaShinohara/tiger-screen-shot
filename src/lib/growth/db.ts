@@ -198,6 +198,22 @@ export async function updateReviewMarks(
   for (const appId of new Set(reviews.map((review) => review.appId))) announceGrowthChange(appId);
 }
 
+export async function updateExistingReviewMark(
+  reviewId: string,
+  appId: string,
+  change: (mark: ReviewMark | undefined, review: { id: string; appId: string }) => ReviewMark | null
+): Promise<void> {
+  const database = db();
+  await database.transaction('rw', database.reviews, database.reviewMarks, async () => {
+    const review = await database.reviews.get(reviewId);
+    if (!review || review.appId !== appId) throw new Error('Review not found for this app.');
+    const next = change(await database.reviewMarks.get(reviewId), { id: reviewId, appId });
+    if (next) await database.reviewMarks.put(next);
+    else await database.reviewMarks.delete(reviewId);
+  });
+  announceGrowthChange(appId);
+}
+
 /** Take a tag off every review that has it, for deleting the tag. */
 export async function dropTagEverywhere(tagId: string): Promise<void> {
   const database = db();

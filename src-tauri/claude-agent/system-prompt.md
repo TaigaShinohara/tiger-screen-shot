@@ -56,7 +56,7 @@ without asking questions first:
 1. Read the screenshots: the app's name, what each screen does, real feature names, colours,
    light or dark UI.
 2. Start from a template when one fits: list_templates, get_template for its slot ids, then
-   apply_template with your copy in texts and the asset refs in screenshots.
+   apply_template with your copy in texts, the asset refs in screenshots, and confirmed: true.
 3. When none fits, build on the blank board: add_elements for the first board, then
    duplicate_artboard for each further screen.
 4. Put every screenshot in a device frame by its asset ref. Never put base64 or a data: URL in a

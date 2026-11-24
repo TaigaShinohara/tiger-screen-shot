@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../fixtures/test';
 import type { TauriHttpRule } from '../fixtures/tauri-runtime';
+import type { TauriHarness } from '../fixtures/tauri';
 
 // The Website view (src/lib/website): a home page, a support page and a
 // privacy policy made from the open project, in its languages, published to
@@ -10,6 +11,20 @@ import type { TauriHttpRule } from '../fixtures/tauri-runtime';
 // its device sign-in and the github.io site) by the harness's HTTP rules.
 
 const WEBSITE = "Website: your app's home, support and privacy pages";
+
+let agentCalls = 0;
+async function agentTool(tauri: TauriHarness, name: string, args: Record<string, unknown>, agent: boolean) {
+  const id = ++agentCalls;
+  const callId = `website-agent-${id}`;
+  await tauri.emitFromBackend('abs-mcp-request', {
+    callId, nonce: 'e2e-bridge-nonce', agent,
+    message: { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } },
+  });
+  const reply = async () => (await tauri.callsTo('abs_mcp_respond')).find((entry) => entry.args.callId === callId);
+  await expect.poll(async () => !!(await reply()), { timeout: 30_000 }).toBe(true);
+  const response = (await reply())!.args.response as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  return { isError: response.result?.isError === true, text: response.result?.content?.[0]?.text ?? '' };
+}
 
 /** abs_claude_detect for a Claude Code signed in on a Max plan. */
 const CLAUDE_READY = {
@@ -170,6 +185,32 @@ async function editStoredSite(page: Page, patch: { languages?: string[]; transla
 }
 
 test.describe('website', () => {
+  test('the built-in agent previews and saves an edit to the visible website', async ({ app, page, tauri, isDesktop }) => {
+    test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
+    await projectWithText(app);
+    const view = await openWebsite(page);
+    await makeSite(page, view);
+    const projects = await agentTool(tauri, 'list_projects', {}, true);
+    expect(projects.isError, projects.text).toBe(false);
+    const project = JSON.parse(projects.text).find((entry: { open: boolean }) => entry.open);
+    expect(project?.id).toBeTruthy();
+    const args = { projectId: project.id, changes: { headline: 'Agent headline' } };
+    expect((await agentTool(tauri, 'get_website_draft', { projectId: project.id }, false)).isError).toBe(true);
+    const preview = await agentTool(tauri, 'update_website_draft', args, true);
+    expect(preview.isError, preview.text).toBe(false);
+    const plan = JSON.parse(preview.text);
+    expect(plan.dryRun).toBe(true);
+    await expect(view.getByLabel('Headline', { exact: true })).not.toHaveValue('Agent headline');
+    const applied = await agentTool(tauri, 'update_website_draft', { ...args, ...plan, dryRun: false, confirmed: true }, true);
+    expect(applied.isError, applied.text).toBe(false);
+    await expect(view.getByLabel('Headline', { exact: true })).toHaveValue('Agent headline');
+    await page.reload();
+    await app.waitForBoot();
+    const again = await openWebsite(page);
+    await openSection(again, /^Home page/);
+    await expect(again.getByLabel('Headline', { exact: true })).toHaveValue('Agent headline');
+  });
+
   test('the Website button sits under Discover, and a first visit shows the site the project would make', async ({ app, page, tauri, isDesktop }) => {
     await projectWithText(app);
     const names = await views(page).getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));

@@ -44,7 +44,20 @@ import {
   type KeywordStanding,
 } from '@/lib/growth/keywords';
 import { addDays } from '@/lib/growth/dates';
+import { planTrackedKeywords } from '@/lib/growth/keywordWatch';
 import type { ListingLocale, ListingSnapshot } from '@/lib/growth/types';
+
+test('keyword preview uses the same normalization and limit as a write', () => {
+  const list: KeywordList = { owner: '123', countries: ['US'], keywords: [{ term: 'ludo', addedAt: 1 }] };
+  const plan = planTrackedKeywords(list, [' LUDO ', 'Puzzle', 'Puzzle'], 'ai', 42);
+  assert.deepEqual(plan.added, ['puzzle']);
+  assert.equal(plan.refused, 0);
+  assert.equal(plan.keywords[1].term, 'puzzle');
+  assert.ok(plan.keywords[1].id);
+  assert.equal(list.keywords.length, 1);
+  const full = { ...list, keywords: Array.from({ length: 50 }, (_, i) => ({ term: `term${i}`, addedAt: i })) };
+  assert.equal(planTrackedKeywords(full, ['another'], 'ai', 42).refused, 1);
+});
 
 const SHOT = (name: string) => `https://is1-ssl.mzstatic.com/image/thumb/PurpleSource211/v4/e2/${name}.jpg/392x696bb.jpg`;
 
