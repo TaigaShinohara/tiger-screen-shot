@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
 import { parseArgs } from '../../cli/src/args';
 import { run } from '../../cli/src/commands/deliver';
 import { isCompletePng } from '../../cli/src/delivery/png';
 import { deflateSync } from 'node:zlib';
 import { readDeliveryPlan, sha256 } from '../../cli/src/delivery/spec';
-import { configureOutput } from '../../cli/src/log';
+import { captureOutput, configureOutput, takeCapturedOutput } from '../../cli/src/log';
 import type { CommandContext } from '../../cli/src/context';
 
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aFJ8AAAAASUVORK5CYII=', 'base64');
+const png = testPng(1, 1);
 function testPng(width: number, height: number): Buffer {
   const crc = (bytes: Buffer): number => {
     let value = 0xffffffff;
@@ -39,12 +40,10 @@ function fixture(root: string) {
 async function invoke(root: string, argv: string[]) {
   const args = parseArgs(['deliver', ...argv]);
   const ctx = { args, loaded: { config: {}, file: null, root }, config: {}, root, json: true, offline: true, outDir: root, projectFile: '', session: async () => { throw new Error('unexpected browser'); }, dispose: async () => {} } as unknown as CommandContext;
-  const original = process.stdout.write;
-  let output = '';
   configureOutput({ json: true, quiet: true });
-  process.stdout.write = ((chunk: string | Uint8Array) => { output += chunk.toString(); return true; }) as typeof process.stdout.write;
-  try { const code = await run(ctx); return { code, result: JSON.parse(output) }; }
-  finally { process.stdout.write = original; configureOutput({}); }
+  captureOutput();
+  try { const code = await run(ctx); return { code, result: takeCapturedOutput()[0] as any }; }
+  finally { takeCapturedOutput(); configureOutput({}); }
 }
 function review(root: string, f: ReturnType<typeof fixture>) {
   const work = path.join(root, 'work');
@@ -53,7 +52,7 @@ function review(root: string, f: ReturnType<typeof fixture>) {
   for (const [rel, bytes] of [[image, rendered], [thumbnail, thumb]] as const) { fs.mkdirSync(path.dirname(path.join(work, rel)), { recursive: true }); fs.writeFileSync(path.join(work, rel), bytes); }
   const item = { group: 'iphone', screen: 'home', boardId: 'board1', store: 'appstore', format: 'ios', locale: 'ja', order: 1, claim: 'Home screen', source: f.capture, sourceSha256: sha256(png), file: image, sha256: sha256(rendered), thumbnail, thumbnailSha256: sha256(thumb), width: 1206, height: 2622 };
   fs.writeFileSync(path.join(work, 'delivery-workspace.json'), JSON.stringify({ version: 1, status: 'review_required', plan: readDeliveryPlan(f.spec), items: [item] }));
-  const checks = Object.fromEntries(['actualScreen', 'claimAccurate', 'readableFullSize', 'readableThumbnail', 'noClipping', 'appropriateDevice', 'noPlaceholder'].map((key) => [key, true]));
+  const checks: Record<string, boolean | null> = Object.fromEntries(['actualScreen', 'claimAccurate', 'readableFullSize', 'readableThumbnail', 'noClipping', 'appropriateDevice', 'noPlaceholder'].map((key) => [key, true]));
   const result = { version: 1, reviewer: 'ai', items: [{ group: 'iphone', screen: 'home', sha256: item.sha256, thumbnailSha256: item.thumbnailSha256, notes: 'Reviewed both views', checks }] };
   const reviewFile = path.join(root, 'review.json');
   fs.writeFileSync(reviewFile, JSON.stringify(result));
@@ -85,9 +84,82 @@ test('draft creation previews the brief without a project or writes', async () =
     assert.equal(output.result.status, 'planned'); assert.equal(output.result.plan.groups[0].screens[0].sha256, sha256(png));
     assert.deepEqual(fs.readdirSync(root).sort(), before);
     brief.groups[0].screens[0].inputLocale = 'en'; fs.writeFileSync(f.spec, JSON.stringify(brief));
-    await assert.rejects(invoke(root, ['create', '--spec', f.spec, '--work', path.join(root, 'draft'), '--dry-run']), /Input screenshot language differs/);
+    const blocked = await invoke(root, ['create', '--spec', f.spec, '--work', path.join(root, 'draft'), '--dry-run']);
+    assert.equal(blocked.result.issues[0].code, 'language_mismatch');
     assert.equal(fs.existsSync(path.join(root, 'draft')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('preview reports every blocked screen without starting the editor', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-delivery-inputs-'));
+  try {
+    const f = fixture(root);
+    const source = f.value.groups[0].screens[0];
+    const corrupt = path.join(root, 'corrupt.png');
+    fs.writeFileSync(corrupt, png.subarray(0, 32));
+    const { project: _project, ...group } = f.value.groups[0];
+    const changed = { ...f.value, groups: [{ ...group, screens: [
+      { ...source, id: 'missing', input: null }, { ...source, id: 'broken', input: corrupt },
+      { ...source, id: 'wrong-format', inputFormat: 'android' }, { ...source, id: 'wrong-locale', inputLocale: 'en' },
+    ] }] };
+    fs.writeFileSync(f.spec, JSON.stringify(changed));
+    const work = path.join(root, 'work');
+    const { code, result } = await invoke(root, ['create', '--spec', f.spec, '--work', work, '--dry-run']);
+    assert.equal(code, 1);
+    assert.equal(result.status, 'inputs_required');
+    assert.deepEqual(result.issues.map((issue: any) => [issue.screen, issue.code]), [
+      ['missing', 'missing_input'], ['broken', 'invalid_image'], ['wrong-format', 'format_mismatch'], ['wrong-locale', 'language_mismatch'],
+    ]);
+    assert.equal(fs.existsSync(work), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('delivery Capture uses loopback, preserves PNG bytes and binds its record to the brief', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-captured-input-'));
+  const oldToken = process.env.OSG_DESKTOP_MCP_TOKEN;
+  const token = 'test-capture-only-not-a-real-credential';
+  process.env.OSG_DESKTOP_MCP_TOKEN = token;
+  const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+  const device = { id: 'sim-ipad', name: 'QA iPad', platform: 'ios', kind: 'simulator', state: 'running', model: 'iPad Pro' };
+  const server = createServer(async (request, response) => {
+    try {
+      assert.equal(request.headers.authorization, `Bearer ${token}`);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      calls.push(rpc.params);
+      const list = { ios: { devices: [device] }, android: { devices: [] } };
+      const data = rpc.params.name === 'capture_screenshot'
+        ? { width: 1, height: 1, device, pngDataUrl: `data:image/png;base64,${png.toString('base64')}` }
+        : { ...list, ...(rpc.params.arguments.device ? { apps: [{ id: 'example.app', running: true }] } : {}) };
+      response.end(JSON.stringify({ result: { content: [{ type: 'text', text: JSON.stringify(data) }] } }));
+    } catch { response.writeHead(500).end(); }
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No test server');
+    const f = fixture(root), output = path.join(root, 'capture');
+    const spec = { ...f.value, groups: [{ ...f.value.groups[0], project: undefined, format: 'ipad-pro-13', screens: [{ ...f.value.groups[0].screens[0], input: null }] }] };
+    fs.writeFileSync(f.spec, JSON.stringify(spec));
+    const args = ['capture', '--spec', f.spec, '--group', 'iphone', '--screen', 'home', '--device', device.id, '--app', 'example.app', '--port', String(address.port), '--out', output, '--current-screen'];
+    assert.equal((await invoke(root, [...args, '--dry-run'])).result.status, 'planned');
+    assert.equal(calls.length, 0);
+    const captured = await invoke(root, args);
+    assert.equal(captured.result.status, 'captured');
+    assert.deepEqual(calls.at(-1)?.arguments, { device: device.id, locale: 'ja', returnOriginal: true, tidyStatusBar: false });
+    assert.deepEqual(fs.readFileSync(captured.result.input), png);
+    Object.assign(spec.groups[0].screens[0], { input: captured.result.input, capture: captured.result.capture, inputFormat: 'ipad-pro-13' });
+    fs.writeFileSync(f.spec, JSON.stringify(spec));
+    assert.equal(readDeliveryPlan(f.spec, { draft: true }).groups[0].screens[0].capture?.record.sha256, sha256(png));
+    fs.writeFileSync(captured.result.capture, JSON.stringify({ ...captured.result.record, screen: 'wrong' }));
+    assert.throws(() => readDeliveryPlan(f.spec, { draft: true }), /Capture record does not match/);
+  } finally {
+    server.close();
+    if (oldToken === undefined) delete process.env.OSG_DESKTOP_MCP_TOKEN;
+    else process.env.OSG_DESKTOP_MCP_TOKEN = oldToken;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a generated delivery plan rejects a changed original brief', () => {
@@ -126,7 +198,22 @@ test('delivery requires a complete review of unchanged images and refuses extra 
     const f = fixture(root), r = review(root, f), out = path.join(root, 'out');
     const args = ['finish', '--work', r.work, '--review', r.reviewFile, '--out', out];
     r.result.items[0].checks.noClipping = false; fs.writeFileSync(r.reviewFile, JSON.stringify(r.result));
-    await assert.rejects(invoke(root, args), /incomplete/); assert.equal(fs.existsSync(out), false);
+    const blocked = await invoke(root, args);
+    assert.equal(blocked.result.status, 'review_required');
+    assert.deepEqual(blocked.result.issues[0].failed, ['noClipping']);
+    assert.equal(fs.existsSync(out), false);
+    const passedChecks = r.result.items[0].checks;
+    r.result.items[0].checks = { ...passedChecks, noClipping: null };
+    fs.writeFileSync(r.reviewFile, JSON.stringify(r.result));
+    const unverified = await invoke(root, args);
+    assert.equal(unverified.result.issues[0].code, 'review_unverified');
+    assert.deepEqual(unverified.result.issues[0].unverified, ['noClipping']);
+    r.result.items[0].checks = passedChecks;
+    r.result.items[0].sha256 = 'old-render';
+    fs.writeFileSync(r.reviewFile, JSON.stringify(r.result));
+    assert.equal((await invoke(root, args)).result.issues[0].code, 'stale_review');
+    assert.equal(fs.existsSync(out), false);
+    r.result.items[0].sha256 = r.item.sha256;
     r.result.items[0].checks.noClipping = true; fs.writeFileSync(r.reviewFile, JSON.stringify(r.result));
     fs.writeFileSync(path.join(r.work, 'unexpected.png'), png);
     await assert.rejects(invoke(root, args), /Unexpected workspace file/); assert.equal(fs.existsSync(out), false);

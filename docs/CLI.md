@@ -367,7 +367,7 @@ the numbers come out identical to the desktop export.
 
 ### `osg deliver`
 
-Create editable drafts from a brief, or prepare existing projects, then visually review and package screenshots from real captures. See [SCREENSHOT_DELIVERY.md](SCREENSHOT_DELIVERY.md) for the input specification, review and output. Creation and preparation end with review required; only a completed AI-reported review allows finishing.
+Create editable drafts from a brief, capture missing images from a prepared device, or prepare existing projects for visual review. See [SCREENSHOT_DELIVERY.md](SCREENSHOT_DELIVERY.md) for the input specification, capture, review and output. Creation and preparation end with review required. Finish packages the images that pass the complete review.
 
 ### `osg video`
 

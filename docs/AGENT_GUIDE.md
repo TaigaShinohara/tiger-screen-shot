@@ -6,7 +6,7 @@ The requested AI workflow ends with preparing and delivering verified store scre
 
 ## Level and interface
 
-The previous app-wide assessment is L0 with partial read, write and verification features. The current target is L2 for screenshot delivery; that narrower workflow is still being assessed. Non-streaming CLI commands support the optional versioned `--agent-json` envelope described below, while their inner data shapes remain command-specific. `desktop-call` can access supported operations in the running desktop app; file inspection and CLI history alone do not cover its IndexedDB projects or GUI/MCP operations. General dry runs and idempotency are not complete. Do not infer success from a command's name alone.
+Screenshot delivery has reached L2. The workflow was exercised with Japanese iPhone, iPad and Android screenshots, including native desktop Capture on an iPad simulator and a second delivery run after failed review. The previous app-wide assessment remains L0 with partial read, write and verification features. Non-streaming CLI commands support the optional versioned `--agent-json` envelope described below, while their inner data shapes remain command-specific. `desktop-call` can access supported operations in the running desktop app; file inspection and CLI history alone do not cover its IndexedDB projects or GUI/MCP operations.
 
 | Command | Purpose |
 | --- | --- |
@@ -26,9 +26,9 @@ The four inspection commands always emit JSON: success is `{"ok":true,"data":...
 
 Pass `--agent-json` after a non-streaming command for a versioned result envelope. Success has `ok`, `data` and `meta`; failure has `ok`, `error` and `meta`. Exit codes are 0 success, 1 invalid input, 2 execution or verification failure, 3 permission denied and 4 not found. Results that a command emits more than once are returned in an array; a command with no emitted result returns `data: null`. The history record uses the same request ID. `mcp` and `studio` are streaming commands and reject this option. Existing `--json` output and exit codes are unchanged. The envelope standardizes the outer result; command-specific data fields still vary.
 
-`--dry-run` is accepted for `deliver create` and `deliver prepare`, `upload`, `cache prune`, and `localize --csv-in` without `--add`, `--base`, `--text`, `--translate` or `--csv-out`. It is rejected elsewhere. Delivery dry run only reads local inputs; upload dry run still contacts the store and reads credentials. `--yes` confirms the destructive CLI operations listed in the catalog; the equivalent MCP calls require `confirmed: true`. These flags do not authorize actions on the user's behalf. `--idempotency-key` is unsupported and rejected. `--timeout` is supported by `import`, `render`, `video` and `desktop-call` only. Other flags require consulting command documentation.
+`--dry-run` is accepted for `deliver create`, `deliver prepare`, `deliver capture`, `upload`, `cache prune`, and `localize --csv-in` without `--add`, `--base`, `--text`, `--translate` or `--csv-out`. It is rejected elsewhere. Delivery dry run only reads local inputs; upload dry run still contacts the store and reads credentials. `--yes` confirms the destructive CLI operations listed in the catalog; the equivalent MCP calls require `confirmed: true`. These flags do not authorize actions on the user's behalf. `--idempotency-key` is unsupported and rejected. `--timeout` is supported by `import`, `render`, `video` and `desktop-call` only. Other flags require consulting command documentation.
 
-For screenshot delivery, follow [SCREENSHOT_DELIVERY.md](SCREENSHOT_DELIVERY.md). Preparation leaves a review-required workspace; an image-capable AI must inspect every image and thumbnail before finishing. The AI review is recorded, not independently verified by the tool.
+For screenshot delivery, follow [SCREENSHOT_DELIVERY.md](SCREENSHOT_DELIVERY.md). Use Capture for missing screens available on a prepared desktop device. Preparation produces a workspace for review. Inspect every full image and thumbnail, and use the screen-level issues to decide what to capture, edit or review again.
 
 ## Three workflows
 

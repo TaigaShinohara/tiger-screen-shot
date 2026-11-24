@@ -5,7 +5,8 @@ import type { CommandContext } from '../context.js';
 import { EXIT, usageError } from '../errors.js';
 import { emit, info } from '../log.js';
 import { openProject } from './render.js';
-import { readDeliveryPlan, fileHash, sha256, type DeliveryPlan } from '../delivery/spec.js';
+import { readDeliveryPlan, fileHash, sha256, DeliveryInputError, type DeliveryPlan, type Screen } from '../delivery/spec.js';
+import { captureInput } from '../delivery/capture.js';
 import { resolveEditor } from '../editor/resolve.js';
 import { readPngInfo } from '../verify/png.js';
 import { isCompletePng } from '../delivery/png.js';
@@ -34,7 +35,10 @@ function assertCurrent(plan: DeliveryPlan): void {
   if (plan.requestSource) sameFile(plan.requestSource.file, plan.requestSource.sha256);
   for (const group of plan.groups) {
     sameFile(group.project, group.projectSha256);
-    for (const screen of group.screens) sameFile(screen.input, screen.sha256);
+    for (const screen of group.screens) {
+      sameFile(screen.input, screen.sha256);
+      if (screen.capture) sameFile(screen.capture.file, screen.capture.sha256);
+    }
   }
 }
 /** Make an editable first draft through the same design tools as the editor. */
@@ -53,33 +57,51 @@ async function create(ctx: CommandContext, specFile: string, workDir: string): P
   for (const group of plan.groups) {
     const preset = DEVICE_FORMAT_PRESETS.find((candidate) => candidate.id === group.format)!;
     const { width, height } = preset.artboard;
+    const tablet = group.format.startsWith('ipad-') || group.format.startsWith('tablet-');
+    const imageTop = tablet ? 0.145 : 0.18;
+    const inset = tablet ? 0.03 : 0.045;
     const boards: Record<string, unknown>[] = [], screens: Record<string, unknown>[] = [];
     for (const screen of group.screens) {
       const raw = fs.readFileSync(screen.input);
       if (sha256(raw) !== screen.sha256) throw usageError(`Input screenshot changed during creation: ${screen.input}`);
       const mime = path.extname(screen.input).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg';
-      await session.page.evaluate(async ({ data, mime }) => { const img = new Image(); img.src = `data:${mime};base64,${data}`; await img.decode(); if (!img.naturalWidth || !img.naturalHeight) throw new Error('Input has no pixels'); }, { data: raw.toString('base64'), mime });
+      await decodeSource(session.page, screen, group.id, raw, mime);
       const board = await session.call('create_artboard', { name: screen.id, width, height, backgroundColor: '#F3F6FA' }) as { id?: string };
       if (!board?.id) throw usageError(`Could not create board for ${group.id}/${screen.id}.`);
       await session.call('add_elements', { artboardId: board.id, elements: [
-        { type: 'text', x: width * 0.07, y: height * 0.035, width: width * 0.86, height: height * 0.15, content: screen.claim, fontSize: 42 * width / 1206, fontFamily: 'Noto Sans JP', fontWeight: 'bold', color: '#19283C', textAlign: 'center', lineHeight: 1.15 },
-        { type: 'image', x: width * 0.07, y: height * 0.20, width: width * 0.86, height: height * 0.75, imageSrc: `data:${mime};base64,${raw.toString('base64')}`, objectFit: 'contain' },
+        { type: 'text', x: width * 0.06, y: height * 0.025, width: width * 0.88, height: height * (imageTop - 0.04), content: screen.claim, fontSize: (tablet ? 34 : 37) * width / 1206, fontFamily: 'Noto Sans JP', fontWeight: 'bold', color: '#19283C', textAlign: 'center', lineHeight: 1.15 },
+        { type: 'image', x: width * inset, y: height * imageTop, width: width * (1 - 2 * inset), height: height * (0.97 - imageTop), imageSrc: `data:${mime};base64,${raw.toString('base64')}`, objectFit: 'contain' },
       ] });
       const state = await session.call('get_artboard', { artboardId: board.id }) as Record<string, unknown>;
       delete state.active; boards.push(state);
-      screens.push({ id: screen.id, boardId: board.id, input: screen.input, inputFormat: screen.inputFormat, inputLocale: screen.inputLocale, claim: screen.claim });
+      screens.push({ id: screen.id, boardId: board.id, input: screen.input, inputFormat: screen.inputFormat, inputLocale: screen.inputLocale, claim: screen.claim, ...(screen.capture ? { capture: screen.capture.file } : {}) });
     }
     const project = path.join(workDir, `${group.id}.project.json`);
     writeJson(project, { id: `delivery-${group.id}`, name: `${plan.name} ${group.id}`, timestamp: new Date().toISOString(), projectData: boards, ...await snapshotProjectAssets(session, boards) });
     groups.push({ id: group.id, store: group.store, format: group.format, locale: group.locale, projectLocale: null, project, screens });
   }
   sameFile(plan.spec, plan.specSha256);
-  for (const group of plan.groups) for (const screen of group.screens) sameFile(screen.input, screen.sha256);
+  for (const group of plan.groups) for (const screen of group.screens) {
+    sameFile(screen.input, screen.sha256);
+    if (screen.capture) sameFile(screen.capture.file, screen.capture.sha256);
+  }
   const generatedSpec = path.join(workDir, 'delivery-spec.json');
   writeJson(generatedSpec, { version: 1, name: plan.name, requestSource: { file: plan.spec, sha256: plan.specSha256 }, groups });
   return prepare(ctx, generatedSpec, path.join(workDir, 'review'));
 }
 function writeJson(file: string, value: unknown): void { fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); }
+async function decodeSource(page: import('puppeteer-core').Page, screen: Screen, group: string, bytes: Buffer, mime: string): Promise<void> {
+  try {
+    await page.evaluate(async ({ data, mime }) => {
+      const image = new Image();
+      image.src = `data:${mime};base64,${data}`;
+      await image.decode();
+      if (!image.naturalWidth || !image.naturalHeight) throw new Error('Input has no pixels.');
+    }, { data: bytes.toString('base64'), mime });
+  } catch {
+    throw new DeliveryInputError([{ group, screen: screen.id, code: 'invalid_image', message: 'The input could not be decoded completely.', next: 'correct_input' }]);
+  }
+}
 async function decodeAndThumbnail(page: import('puppeteer-core').Page, bytes: Buffer, thumb: boolean): Promise<string | null> {
   const data = bytes.toString('base64');
   return page.evaluate(async ({ data, thumb }) => {
@@ -118,10 +140,7 @@ async function prepare(ctx: CommandContext, specFile: string, workDir: string): 
     for (const screen of group.screens) {
       const bytes = fs.readFileSync(screen.input);
       const mime = path.extname(screen.input).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg';
-      await session.page.evaluate(async ({ data, mime }) => {
-        const img = new Image(); img.src = `data:${mime};base64,${data}`; await img.decode();
-        if (!img.naturalWidth || !img.naturalHeight) throw new Error('Input screenshot has no pixels');
-      }, { data: bytes.toString('base64'), mime });
+      await decodeSource(session.page, screen, group.id, bytes, mime);
     }
     const images = await session.capture(group.screens.map((screen) => screen.boardId), group.format, group.projectLocale);
     if (images.length !== group.screens.length || new Set(images.map((item) => item.artboardId)).size !== group.screens.length) throw usageError(`The editor did not return exactly the requested boards for ${group.id}.`);
@@ -187,16 +206,31 @@ function finish(workDir: string, reviewPath: string, outputDir: string): number 
   assertCurrent(workspace.plan);
   validateWorkspace(workDir, workspace);
   if (outputDir === workDir || outputDir.startsWith(workDir + path.sep) || workDir.startsWith(outputDir + path.sep)) throw usageError('The output and workspace must be separate directories.');
-  if (review.items.length !== workspace.items.length) throw usageError('Review every image.');
+  const issues = [];
+  const expectedKeys = new Set(workspace.items.map((item) => `${item.group}/${item.screen}`));
+  if (review.items.some((entry: any) => !entry || !expectedKeys.has(`${entry.group}/${entry.screen}`))) throw usageError('The review contains unknown images.');
   const seen = new Set<string>();
   for (const item of workspace.items) {
     const key = `${item.group}/${item.screen}`;
     if (seen.has(key)) throw usageError('Duplicate image in workspace.');
     seen.add(key);
     const matches = review.items.filter((entry: any) => entry.group === item.group && entry.screen === item.screen);
-    if (matches.length !== 1) throw usageError(`Review missing or duplicated for ${key}.`);
+    if (matches.length !== 1) {
+      issues.push({ group: item.group, screen: item.screen, code: matches.length ? 'duplicate_review' : 'missing_review', next: 'review_image' });
+      continue;
+    }
     const entry = matches[0];
-    if (entry.sha256 !== item.sha256 || entry.thumbnailSha256 !== item.thumbnailSha256 || typeof entry.notes !== 'string' || !entry.notes.trim() || !entry.checks || !CHECKS.every((check) => entry.checks[check] === true)) throw usageError(`AI review is incomplete or does not match ${key}.`);
+    if (entry.sha256 !== item.sha256 || entry.thumbnailSha256 !== item.thumbnailSha256) {
+      issues.push({ group: item.group, screen: item.screen, code: 'stale_review', next: 'review_current_images' });
+      continue;
+    }
+    const failed = CHECKS.filter((check) => entry.checks?.[check] === false);
+    const unverified = CHECKS.filter((check) => entry.checks?.[check] !== true && entry.checks?.[check] !== false);
+    if (failed.length || unverified.length || typeof entry.notes !== 'string' || !entry.notes.trim()) {
+      issues.push({ group: item.group, screen: item.screen, code: failed.length ? 'review_failed' : 'review_unverified', failed, unverified,
+        next: failed.length ? 'correct_input_or_project_and_prepare_again' : 'review_image' });
+      continue;
+    }
     sameFile(child(workDir, item.file), item.sha256); sameFile(child(workDir, item.thumbnail), item.thumbnailSha256);
     const bytes = fs.readFileSync(child(workDir, item.file));
     const thumbnail = fs.readFileSync(child(workDir, item.thumbnail));
@@ -204,6 +238,10 @@ function finish(workDir: string, reviewPath: string, outputDir: string): number 
     const preset = DEVICE_FORMAT_PRESETS.find((candidate) => candidate.id === item.format);
     if (!preset || !isCompletePng(bytes) || !header || header.width !== preset.artboard.width || header.height !== preset.artboard.height || header.width !== item.width || header.height !== item.height || checkPng(header, rulesetFor(item.store)).some((finding) => finding.level !== 'ok')) throw usageError(`Image ${key} no longer passes the PNG and store checks.`);
     if (!isCompletePng(thumbnail) || !thumbHeader || thumbHeader.width !== 240) throw usageError(`Thumbnail ${key} is invalid.`);
+  }
+  if (issues.length) {
+    emit({ status: 'review_required', workspace: workDir, spec: workspace.plan.spec, issues });
+    return EXIT.verify;
   }
   fs.mkdirSync(outputDir, { recursive: false, mode: 0o700 });
   const files = workspace.items.map((item) => {
@@ -217,7 +255,8 @@ function finish(workDir: string, reviewPath: string, outputDir: string): number 
     fs.copyFileSync(child(workDir, item.thumbnail), thumbnailTarget, fs.constants.COPYFILE_EXCL);
     sameFile(target, item.sha256);
     sameFile(thumbnailTarget, item.thumbnailSha256);
-    return { ...item, file: rel, thumbnail: reviewThumbnail, review: review.items.find((entry: any) => entry.group === item.group && entry.screen === item.screen) };
+    const capture = workspace.plan.groups.find((group) => group.id === item.group)?.screens.find((screen) => screen.id === item.screen)?.capture;
+    return { ...item, file: rel, thumbnail: reviewThumbnail, ...(capture ? { capture: capture.record, captureRecordSha256: capture.sha256 } : {}), review: review.items.find((entry: any) => entry.group === item.group && entry.screen === item.screen) };
   });
   writeJson(path.join(outputDir, 'delivery-manifest.json'), { version: 1, status: 'delivered', name: workspace.plan.name, files, specSha256: workspace.plan.specSha256, ...(workspace.plan.requestSource ? { requestSourceSha256: workspace.plan.requestSource.sha256 } : {}), verifiedAt: new Date().toISOString(), visualReview: 'AI-reported; not an independent guarantee of store acceptance' });
   emit({ status: 'delivered', output: outputDir, manifest: path.join(outputDir, 'delivery-manifest.json'), files: files.length });
@@ -225,15 +264,26 @@ function finish(workDir: string, reviewPath: string, outputDir: string): number 
 }
 export async function run(ctx: CommandContext): Promise<number> {
   const action = ctx.args.positionals[0] ?? 'prepare';
-  const allowed = new Set(action === 'prepare' || action === 'create' ? ['spec', 'work', 'dry-run', 'offline', 'browser', 'json', 'quiet', 'verbose'] : ['work', 'review', 'out', 'offline', 'json', 'quiet', 'verbose']);
+  const allowed = new Set(action === 'capture' ? ['spec', 'group', 'screen', 'port', 'device', 'app', 'launch', 'screen-url', 'current-screen', 'out', 'dry-run', 'json', 'quiet', 'verbose']
+    : action === 'prepare' || action === 'create' ? ['spec', 'work', 'dry-run', 'offline', 'browser', 'json', 'quiet', 'verbose']
+      : ['work', 'review', 'out', 'offline', 'json', 'quiet', 'verbose']);
   for (const flag of Object.keys(ctx.args.flags)) if (!allowed.has(flag)) throw usageError(`--${flag} is not supported for deliver ${action}.`);
-  if (ctx.args.positionals.length > 1) throw usageError('Unexpected delivery arguments.');
-  if (action === 'create') return create(ctx, absolute(flagString(ctx.args.flags, 'spec'), '--spec'), absolute(flagString(ctx.args.flags, 'work'), '--work'));
-  if (action === 'prepare') return prepare(ctx, absolute(flagString(ctx.args.flags, 'spec'), '--spec'), absolute(flagString(ctx.args.flags, 'work'), '--work'));
+  if (ctx.args.positionals.length > 1 || ctx.args.passthrough.length) throw usageError('Unexpected delivery arguments.');
+  if (action === 'capture') return captureInput(ctx, absolute(flagString(ctx.args.flags, 'spec'), '--spec'), absolute(flagString(ctx.args.flags, 'out'), '--out'));
+  if (action === 'create' || action === 'prepare') {
+    const spec = absolute(flagString(ctx.args.flags, 'spec'), '--spec');
+    const work = absolute(flagString(ctx.args.flags, 'work'), '--work');
+    try { return await (action === 'create' ? create(ctx, spec, work) : prepare(ctx, spec, work)); }
+    catch (error) {
+      if (!(error instanceof DeliveryInputError)) throw error;
+      emit({ status: 'inputs_required', spec, issues: error.issues, next: action });
+      return EXIT.usage;
+    }
+  }
   if (action === 'finish') {
     if (flagBool(ctx.args.flags, 'dry-run')) throw usageError('Finish does not support --dry-run.');
     return finish(absolute(flagString(ctx.args.flags, 'work'), '--work'), absolute(flagString(ctx.args.flags, 'review'), '--review'), absolute(flagString(ctx.args.flags, 'out'), '--out'));
   }
-  info('Use osg deliver create, osg deliver prepare or osg deliver finish.');
+  info('Use osg deliver create, capture, prepare or finish.');
   throw usageError(`Unknown delivery action: ${action}`);
 }

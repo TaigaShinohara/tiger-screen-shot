@@ -1,6 +1,23 @@
 # Screenshot delivery
 
-This workflow creates or prepares editable projects with real captures. It does not submit to a store. Capture can provide screenshots using the desktop app; export the originals to files first. This command does not automate device setup or arbitrary app navigation.
+This workflow creates or prepares editable projects with real captures and saves the reviewed package locally.
+
+## Fill a missing screen
+
+Start with existing originals. `create` and `prepare` report screen-specific input problems as `inputs_required`, with the group, screen, reason and next action. A screen awaiting an image can set `input` to `null`. Keep its ID and claim in the brief so Capture can target it.
+
+```sh
+osg desktop-call list_capture_devices --port 8722 --agent-json
+osg deliver capture --spec brief.json --group ipad-ja --screen library \
+  --device DEVICE_ID --app com.example.app --port 8722 \
+  --out ./ipad-library-source --current-screen --agent-json
+```
+
+Enable the desktop MCP connection and supply its bearer token via `OSG_DESKTOP_MCP_TOKEN`. Choose a running device and an installed app. Use `--launch` for the app's first screen, `--screen-url` for a link the target app supports, or `--current-screen` for a screen already reached on the device. Append `--dry-run` to check the request without contacting Capture or writing files. A blocked capture reports why and what to do next. Finish any necessary device permission or screen navigation before retrying.
+
+Capture saves the untouched PNG and `capture.json` in a new directory. Inspect the image for the intended screen and language, then set the screen's `input`, `inputFormat`, `inputLocale` and `capture` from the result. The optional `capture` is the path to `capture.json`; the delivery verifies its association, dimensions and SHA-256. Capture records the requested locale and the agent confirms the language shown, especially for `--current-screen`.
+
+## Create or prepare a draft
 
 For an initial design, use the same spec as below but omit each group's `project` and each screen's `boardId`. Set `projectLocale` to `null`. Supply a short, verified claim for each screen: it becomes the headline, so do not invent features or use generic template copy. `osg deliver create` uses the editor's design tools to create one editable project per group, renders them and stops for visual review:
 
@@ -42,7 +59,7 @@ OSG_EDITOR_DIR=/absolute/path/to/local/out osg deliver prepare --spec delivery.j
 
 Dry run reads and hashes the spec, projects and images, but creates no files and does not start a browser. Prepare requires a fresh work directory and a local editor. It fully decodes source and generated images in the browser, checks PNG chunks and store rules, and writes full images and 240-pixel-wide thumbnails. It reports `review_required` and exits with a verification failure until review; it is not a completed delivery. If preparation fails, the work directory is retained for diagnosis; use a new path for another run. It does not modify the original images or projects.
 
-An AI with image viewing capabilities must inspect every full image and its thumbnail. It checks actual screen, accurate claim, readability at both sizes, clipping, device fit and placeholders. If any check is uncertain or failed, correct the project and prepare again; never mark it as passed without inspecting it. The tool does not itself establish that a reviewer was an AI or independently verify the visual judgment.
+An AI with image viewing capabilities inspects every full image and its thumbnail. At full size, check the actual screen and language, accurate claim, readable content, clipping, device fit and placeholders. At thumbnail size, check that the headline is readable and the part of the app it describes is recognizable. Mark an issue as `false` and an unverified check as `null`. Finish reports missing, failed, unverified and stale reviews by screen. Replace an unsuitable source or edit the existing project as appropriate, prepare into a new directory, and review the new images and hashes. For a changed original brief, run `create` again. The review records the agent's visual judgment.
 
 Write the review JSON **outside** the workspace using the paths and hashes returned by prepare:
 
