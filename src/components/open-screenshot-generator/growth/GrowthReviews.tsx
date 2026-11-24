@@ -44,11 +44,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { saveBlobToDisk } from '@/lib/desktop';
 import { suggestReply, translateText, type ReplyTone } from '@/lib/growth/ai';
-import { MAX_REPLY_LENGTH, deleteReviewReply, replyToReview } from '@/lib/growth/asc';
+import { MAX_REPLY_LENGTH, deleteReviewReply } from '@/lib/growth/asc';
 import { formatDay, today } from '@/lib/growth/dates';
-import { updateReviewMarks, writeReview } from '@/lib/growth/db';
+import { onGrowthChange, readReviewReplyDraft, removeReviewReplyDraftIfSame, updateReviewMarks, writeReview } from '@/lib/growth/db';
 import { formatAgo, formatExact } from '@/lib/growth/format';
-import { MAX_PLAY_REPLY_LENGTH, replyToPlayReview } from '@/lib/growth/play';
+import { MAX_PLAY_REPLY_LENGTH } from '@/lib/growth/play';
+import { sendReviewReply, withReviewReplyLock } from '@/lib/growth/reviewReply';
 import {
   DEFAULT_FILTER,
   SORT_LABELS,
@@ -684,6 +685,7 @@ function ReviewCard({
   const view = useGrowthView();
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [prepared, setPrepared] = useState<string | null>(null);
   const [tone, setTone] = useState<ReplyTone>('friendly');
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
@@ -691,6 +693,19 @@ function ReviewCard({
   const [translation, setTranslation] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    let live = true;
+    let sequence = 0;
+    const refresh = () => {
+      const request = ++sequence;
+      void readReviewReplyDraft(review.appId, review.id).then((value) => {
+        if (live && request === sequence) setPrepared(value);
+      }).catch((error) => console.error('The prepared reply could not be read', error));
+    };
+    refresh();
+    const unsubscribe = onGrowthChange((appId) => { if (appId === null || appId === review.appId) refresh(); });
+    return () => { live = false; unsubscribe(); };
+  }, [review.appId, review.id]);
   // What the AI is writing for this card has nowhere to go once the card is
   // gone (another section, another filter), so leaving stops its CLI. A reply
   // or a delete already sent to the store is let finish.
@@ -760,15 +775,11 @@ function ReviewCard({
       const text = draft.trim();
       if (!text) throw new Error('Write a reply first');
       onAnswered();
-      let response;
-      if (play) {
-        if (!view.playCredentials) throw new Error('Add your Google Play service account key under Setup first');
-        response = await replyToPlayReview(view.playCredentials, review.id, text);
-      } else {
-        if (!view.credentials) throw new Error('Add your App Store Connect API key under Setup first');
-        response = await replyToReview(view.credentials, review.id, text);
-      }
-      await writeReview({ ...review, response });
+      await withReviewReplyLock(review.appId, review.id, async () => {
+        const response = await sendReviewReply(review.appId, review.id, text, { appstore: view.credentials ?? undefined, playstore: view.playCredentials ?? undefined });
+        await writeReview({ ...review, response });
+        await removeReviewReplyDraftIfSame(review.appId, review.id, text).catch((error) => console.error('The prepared reply could not be cleared', error));
+      });
       setComposing(false);
       setDraft('');
     });
@@ -975,6 +986,14 @@ function ReviewCard({
               Done
             </Button>
           )}
+        </div>
+      )}
+
+      {prepared && !composing && (
+        <div className="pl-7">
+          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { setDraft(prepared); setComposing(true); }}>
+            Use prepared reply
+          </Button>
         </div>
       )}
 

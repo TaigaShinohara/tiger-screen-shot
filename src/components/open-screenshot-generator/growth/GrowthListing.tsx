@@ -34,10 +34,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { reviewListingWithAi, suggestListingField, translateListingFields } from '@/lib/growth/ai';
-import { addListingLanguage, applyListingChanges, editableAppInfoId, fetchListing } from '@/lib/growth/asc';
+import { addListingLanguage, editableAppInfoId, fetchListing } from '@/lib/growth/asc';
 import { announceGrowthChange, writeListing, writeMeta } from '@/lib/growth/db';
 import { listingFieldEditable, listingFieldLabel, listingFieldsFor, listingLimit } from '@/lib/growth/listingFields';
-import { applyPlayListingChanges, fetchPlayListing } from '@/lib/growth/play';
+import { fetchPlayListing } from '@/lib/growth/play';
+import { sendListingChanges } from '@/lib/growth/listingApply';
 import { metaKeys, type LiveListing } from '@/lib/growth/sync';
 import { recordListingChange } from '@/lib/growth/events';
 import { cleanKeywords, collapseChanges, fieldLength, listingScore, splitKeywords } from '@/lib/growth/listingChecks';
@@ -190,26 +191,7 @@ export function GrowthListing() {
     run('apply', async () => {
       const toApply = collapseChanges(changes);
       if (toApply.length === 0) return;
-      for (const change of toApply) {
-        if (!fields.includes(change.field)) {
-          throw new Error(`${view.words.store} has no ${labelOf(change.field).toLowerCase()}. Remove the ${labelOf(change.field).toLowerCase()} change first`);
-        }
-        if (!fieldEditable(listing, change.field).ok) {
-          throw new Error(`${labelOf(change.field)} cannot be changed right now. Remove the ${labelOf(change.field).toLowerCase()} change first`);
-        }
-        if (fieldLength(change.after) > listingLimit(appId, change.field)) {
-          throw new Error(`The ${listingLanguageName(change.locale)} ${labelOf(change.field).toLowerCase()} is over the ${listingLimit(appId, change.field)} character limit`);
-        }
-      }
-      let result: { applied: string[]; warnings: string[]; sentForReview?: boolean };
-      if (play) {
-        if (!view.playCredentials) throw new Error('Add your Google Play service account key under Setup first');
-        const written = await applyPlayListingChanges(view.playCredentials, listing, toApply);
-        result = { applied: written.applied, warnings: [], sentForReview: written.sentForReview };
-      } else {
-        if (!view.credentials) throw new Error('Add your App Store Connect API key under Setup first');
-        result = await applyListingChanges(view.credentials, listing, toApply);
-      }
+      const result = await sendListingChanges(listing, toApply, { appstore: view.credentials ?? undefined, playstore: view.playCredentials ?? undefined });
       const took = new Set(result.applied);
       const applied = toApply.filter((change) => took.has(`${change.locale}:${change.field}`));
       if (applied.length > 0) {

@@ -99,6 +99,50 @@ export async function writeReview(review: StoreReview): Promise<void> {
   announceGrowthChange(review.appId);
 }
 
+export async function writeReviewResponseIfUnchanged(review: StoreReview, response: NonNullable<StoreReview['response']>): Promise<boolean> {
+  const database = db();
+  const saved = await database.transaction('rw', database.reviews, async () => {
+    const current = await database.reviews.get(review.id);
+    if (!current || JSON.stringify(current) !== JSON.stringify(review)) return false;
+    await database.reviews.put({ ...current, response });
+    return true;
+  });
+  if (saved) announceGrowthChange(review.appId);
+  return saved;
+}
+
+export const reviewReplyDraftKey = (appId: string, reviewId: string) => `review:draft:${appId}:${encodeURIComponent(reviewId)}`;
+
+export async function readReviewReplyDraft(appId: string, reviewId: string): Promise<string | null> {
+  const row = await db().meta.get(reviewReplyDraftKey(appId, reviewId));
+  if (!row) return null;
+  if (typeof row.value !== 'string') throw new Error('The prepared reply could not be read.');
+  return row.value;
+}
+
+export async function updateReviewReplyDraft(appId: string, reviewId: string, expectedReview: string, expectedDraft: string | null, text: string): Promise<void> {
+  const database = db();
+  await database.transaction('rw', [database.reviews, database.meta], async () => {
+    const review = await database.reviews.get(reviewId);
+    if (!review || review.appId !== appId || JSON.stringify(review) !== expectedReview) throw new Error('The review changed. Preview again.');
+    const key = reviewReplyDraftKey(appId, reviewId);
+    const current = await database.meta.get(key);
+    if ((current?.value ?? null) !== expectedDraft) throw new Error('The prepared reply changed. Preview again.');
+    await database.meta.put({ key, value: text });
+  });
+  announceGrowthChange(appId);
+}
+
+export async function removeReviewReplyDraftIfSame(appId: string, reviewId: string, text: string): Promise<void> {
+  const database = db();
+  await database.transaction('rw', database.meta, async () => {
+    const key = reviewReplyDraftKey(appId, reviewId);
+    const current = await database.meta.get(key);
+    if (current?.value === text) await database.meta.delete(key);
+  });
+  announceGrowthChange(appId);
+}
+
 export async function readRatings(appId: string): Promise<TerritoryRating[]> {
   return db().ratings.where('appId').equals(appId).toArray();
 }

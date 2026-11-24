@@ -18,9 +18,11 @@ import {
 import {
   deleteAccountLink,
   deleteAccountLinkByRemote,
+  deleteAccountLinkIfUnchanged,
   getAccountLink,
   hashDocument,
   putAccountLink,
+  recordAccountSyncResult,
 } from './links';
 import { getSession, getSessionGeneration, setSession, updateSessionIfCurrent } from './store';
 import {
@@ -267,7 +269,11 @@ export async function syncProjectToAccount(projectId: string): Promise<AccountSy
     // The copy is gone, or is no longer readable. Recreating it would be the
     // one thing this path promises never to do, so forget it instead and let a
     // manual save decide.
-    await deleteAccountLink(projectId);
+    if (!await deleteAccountLinkIfUnchanged(link)) {
+      const current = await db.accountLinks.get(projectId);
+      if (current && !current.autoSync && current.accountId === link.accountId && current.provider === link.provider && current.remoteId === link.remoteId) return { status: 'unlinked' };
+      throw new AccountBlockedError('The account link changed while the project was syncing. Check the account copy before retrying.');
+    }
     return { status: 'unlinked' };
   }
   // A stored stamp of null means the last push could not learn where it left
@@ -308,7 +314,7 @@ export async function syncProjectToAccount(projectId: string): Promise<AccountSy
     renameTo: project.name === link.lastPushedName ? null : project.name,
   });
 
-  await putAccountLink({
+  const recorded = await recordAccountSyncResult(link, {
     ...link,
     remoteId: saved.remoteId,
     documentId: saved.documentId ?? link.documentId,
@@ -318,6 +324,8 @@ export async function syncProjectToAccount(projectId: string): Promise<AccountSy
     savedAt: new Date(),
     lastPushedName: saved.name,
   });
+  if (recorded === 'changed') throw new AccountBlockedError('The account link changed while the project was syncing. Check the account copy before retrying.');
+  if (recorded === 'paused') return { status: 'unlinked' };
   return { status: 'saved', summary: saved };
 }
 

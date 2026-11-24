@@ -195,7 +195,7 @@ accounts for whoever asks first.
 
 ### Cloud projects
 
-Eleven routes in [`pb-hooks/060_projects.pb.js`](pb-hooks/060_projects.pb.js).
+Twelve routes in [`pb-hooks/060_projects.pb.js`](pb-hooks/060_projects.pb.js).
 Eight need a bearer token and then check the row's `owner` against it; three take
 a share slug and no token.
 
@@ -205,6 +205,7 @@ POST   /api/openscreengen/projects                        auth    save (multipar
 GET    /api/openscreengen/projects/:id                    auth    one, with its asset index
 DELETE /api/openscreengen/projects/:id                    auth    delete it and its blobs
 PUT    /api/openscreengen/projects/:id/share              auth    turn the link on or off
+PUT    /api/openscreengen/projects/:id/share-conditional  auth    change sharing only at the expected project revision
 GET    /api/openscreengen/projects/:id/doc                auth    stream project.json
 POST   /api/openscreengen/projects/:id/assets             auth    upload one blob (multipart)
 GET    /api/openscreengen/projects/:id/assets/:assetId    auth    stream one blob

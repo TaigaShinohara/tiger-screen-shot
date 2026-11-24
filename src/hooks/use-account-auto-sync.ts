@@ -50,8 +50,10 @@ export interface AccountAutoSyncHandle {
   noteSaved: () => void;
   /** The copy is gone, or somebody stopped syncing this project. */
   noteUnlinked: () => void;
+  noteLinkEnabled: (projectId: string) => void;
   /** Push now, clearing a stop or a backoff. What the chip does when clicked. */
   syncNow: () => void;
+  requestSyncNow: () => boolean;
   /** The user's own switch, for copy that explains why nothing is syncing. */
   enabled: boolean;
 }
@@ -99,7 +101,9 @@ export function useAccountAutoSync({
   const noteChange = useCallback((id: string | null) => syncer.noteChange(id), [syncer]);
   const noteSaved = useCallback(() => syncer.noteSaved(), [syncer]);
   const noteUnlinked = useCallback(() => syncer.noteUnlinked(), [syncer]);
+  const noteLinkEnabled = useCallback((id: string) => syncer.noteLinkEnabled(id), [syncer]);
   const syncNow = useCallback(() => syncer.syncNow(), [syncer]);
+  const requestSyncNow = useCallback(() => syncer.requestSyncNow(), [syncer]);
 
-  return { status, noteChange, noteSaved, noteUnlinked, syncNow, enabled };
+  return { status, noteChange, noteSaved, noteUnlinked, noteLinkEnabled, syncNow, requestSyncNow, enabled };
 }

@@ -385,6 +385,28 @@ test.describe('growth on Google Play', () => {
     expect(JSON.parse(posted!.body!)).toEqual({ replyText: 'Sorry about that. Version 3.1 fixes the sync.' });
   });
 
+  test('the agent previews and applies a listing through the mocked Play API', async ({ app, page, tauri }) => {
+    await connect(page);
+    await app.goto();
+    await app.dismissStartDialog();
+    const view = await syncOnce(page);
+    await section(view, 'Store page').click();
+    await view.locator('#growth-field-subtitle').fill('A prepared description');
+    await expect(view.getByText('Changes to apply')).toBeVisible();
+    const before = (await requests(page)).filter((request) => request.method === 'PATCH').length;
+    const preview = await mcpCall(tauri, 'apply_store_listing_drafts', { appId: APP_ID });
+    expect(preview.isError, preview.text).toBe(false);
+    const plan = JSON.parse(preview.text);
+    expect(plan).toMatchObject({ dryRun: true, remoteChecked: false, sendsToStore: true });
+    expect((await requests(page)).filter((request) => request.method === 'PATCH')).toHaveLength(before);
+    const applied = await mcpCall(tauri, 'apply_store_listing_drafts', { appId: APP_ID, dryRun: false, confirmed: true, expectedPlan: plan.expectedPlan });
+    expect(applied.isError, applied.text).toBe(false);
+    expect(JSON.parse(applied.text)).toMatchObject({ sentToStore: true, applied: ['en-US:subtitle'] });
+    const sent = await requests(page);
+    expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(before + 1);
+    expect(sent.filter((request) => request.url.endsWith('edit-1:commit'))).toHaveLength(1);
+  });
+
   test('a store page change goes to Google Play in one commit, and lands on the timeline', async ({ app, page }) => {
     await connect(page);
     await app.goto();

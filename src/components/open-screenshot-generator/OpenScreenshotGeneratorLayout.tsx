@@ -220,9 +220,13 @@ import { GrowthWorkspace, type GrowthRequest } from './growth/GrowthWorkspace';
 import { CaptureWorkspace, type CaptureRequest, type ClipOutcome } from './capture/CaptureWorkspace';
 import { WebsiteWorkspace, type CaptureRequest as WebsiteCaptureRequest, type CapturedBoard } from './website/WebsiteWorkspace';
 import { flushWebsiteSaves } from '@/lib/website/store';
-import { getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
-import { summarizeSyncStatus } from '@/lib/agentSyncStatus';
-import { pauseProjectAccountSync } from '@/lib/account/agentSync';
+import { createWebsiteDraft, getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
+import { publishWebsiteDraft } from '@/lib/website/agentPublish';
+import { translateWebsiteDraft } from '@/lib/website/agentTranslate';
+import { siteBoards } from '@/lib/website/content';
+import { readProjectSyncLinks, summarizeSyncStatus } from '@/lib/agentSyncStatus';
+import { setAgentCloudSharing } from '@/lib/cloud/agentShare';
+import { pauseProjectAccountSync, previewAccountSync, resumeProjectAccountSync } from '@/lib/account/agentSync';
 import { getSessionGeneration } from '@/lib/account/store';
 import { captureTargets } from '@/lib/capture/frames';
 import { placeClip, placeShots, type ClipPlacement, type ShotPlacement } from '@/lib/capture/place';
@@ -267,7 +271,8 @@ import { AgentStartScreen } from './start/AgentStartScreen';
 import { TipsDialog, shouldShowTipsOnStartup } from './TipsDialog';
 import { SettingsDialog } from './SettingsDialog';
 import { DiscoverDialog } from './discover/DiscoverDialog';
-import { isDiscoverConfigured, useDiscoverSession } from '@/lib/discover/session';
+import { getDiscoverSession, isDiscoverConfigured, useDiscoverSession } from '@/lib/discover/session';
+import { collaborationStopPlan, planExistingCollaboration, setFirstCollaborationKey } from '@/lib/collab/agent';
 import { CommunityStartPanel } from './discover/CommunityStartPanel';
 import type { DiscoverPost } from '@/types/discover';
 import { CloudSaveConflictDialog } from './cloud/CloudSaveConflictDialog';
@@ -1168,6 +1173,8 @@ export function OpenScreenshotGeneratorLayout() {
   const [pendingInvite, setPendingInvite] = useState<CollabInvite | null>(null);
   const [isCollabOpen, setIsCollabOpen] = useState(false);
   const [isCollabWorking, setIsCollabWorking] = useState(false);
+  const collabWorkRef = useRef(false);
+  const cloudSharingWorkRef = useRef(false);
   /**
    * The room this project has an invite for, whether or not a session is up.
    *
@@ -1394,8 +1401,10 @@ export function OpenScreenshotGeneratorLayout() {
   // Bumped by every path that puts a project on the canvas: a template, a recent
   // project, an import, the cloud, a shared link. The id cannot carry that on
   // its own, since restoring the cloud copy of the project that is already open
-  // keeps the same id. Only the cloud auto saver reads it, to start again.
+  // keeps the same id. The syncers and Website capture use it to detect that.
   const [projectOpenToken, setProjectOpenToken] = useState(0);
+  const projectOpenTokenRef = useRef(projectOpenToken);
+  projectOpenTokenRef.current = projectOpenToken;
   const [currentProjectName, setCurrentProjectName] = useState<string>('Untitled Project');
   // Same reason as historyIndexRef: the live session reads these from callbacks
   // that were created before the current render.
@@ -2551,6 +2560,10 @@ export function OpenScreenshotGeneratorLayout() {
     onRemote: (boards, name) => remoteArtboardsRef.current(boards, name),
   });
   const collabPublish = collab.publish;
+  const collabRef = useRef(collab);
+  collabRef.current = collab;
+  const collabRoomActiveRef = useRef(!!collab.room || isCollabWorking);
+  collabRoomActiveRef.current = !!collab.room || isCollabWorking;
 
   /*
    * The same project, kept up to date in the user's OWN storage.
@@ -5535,6 +5548,7 @@ export function OpenScreenshotGeneratorLayout() {
    * link handed out so far open nothing at all.
    */
   const startCollabSession = async (options: { rotate?: boolean } = {}) => {
+    if (collabWorkRef.current || cloudSharingWorkRef.current) return;
     if (!isCloudAvailable) return;
     if (!isCloudSignedIn) {
       requireCloudSignIn('Sign in to edit this project with other people.');
@@ -5549,6 +5563,7 @@ export function OpenScreenshotGeneratorLayout() {
       return;
     }
 
+    collabWorkRef.current = true;
     setIsCollabWorking(true);
     try {
       // The push reads the stored row, exactly as every other cloud path does.
@@ -5584,6 +5599,7 @@ export function OpenScreenshotGeneratorLayout() {
       if (error instanceof CloudConflictError) setCloudConflict(error.remote);
       else handleCloudError(error, 'Could not start the session');
     } finally {
+      collabWorkRef.current = false;
       setIsCollabWorking(false);
     }
   };
@@ -5598,6 +5614,8 @@ export function OpenScreenshotGeneratorLayout() {
    * with five copies of a project they joined five times.
    */
   const joinCollabInvite = async (invite: CollabInvite) => {
+    if (collabWorkRef.current || cloudSharingWorkRef.current) return;
+    collabWorkRef.current = true;
     setIsCollabWorking(true);
     setLoadPhase('project');
     try {
@@ -5644,6 +5662,7 @@ export function OpenScreenshotGeneratorLayout() {
         variant: 'destructive',
       });
     } finally {
+      collabWorkRef.current = false;
       setPendingInvite(null);
       setIsJoiningInvite(false);
       setIsCollabWorking(false);
@@ -10887,8 +10906,13 @@ const generateRandomProjectName = (): string => {
   };
   const captureBoardsForWebsiteRef = useRef(captureBoardsForWebsite);
   captureBoardsForWebsiteRef.current = captureBoardsForWebsite;
+  const websiteCaptureTail = useRef<Promise<unknown>>(Promise.resolve());
   // Stable, so the Website view does not start its screenshot work again on every render.
-  const captureForWebsite = useCallback((request: WebsiteCaptureRequest) => captureBoardsForWebsiteRef.current(request), []);
+  const captureForWebsite = useCallback((request: WebsiteCaptureRequest) => {
+    const next = websiteCaptureTail.current.then(() => captureBoardsForWebsiteRef.current(request));
+    websiteCaptureTail.current = next.catch(() => undefined);
+    return next;
+  }, []);
   const websiteBackToEditor = useCallback(() => setActivity('editor'), []);
   const websiteProject = useMemo(() => ({ id: activeProjectId, name: currentProjectName, artboards }), [activeProjectId, currentProjectName, artboards]);
 
@@ -11757,13 +11781,33 @@ const generateRandomProjectName = (): string => {
       if (!await db.projects.get(projectId)) throw new Error('Project not found. Call list_projects for valid IDs.');
       return getWebsiteDraft(projectId);
     },
+    createWebsiteDraft: async (args) => createWebsiteDraft(args, () => {
+      const id = activeProjectIdRef.current;
+      if (!id || id !== args.projectId) throw new Error('Open that project first.');
+      return { id, name: projectNameRef.current, artboards: artboardsRef.current };
+    }),
+    publishWebsiteDraft: async (args) => publishWebsiteDraft(args, () => {
+      const id = activeProjectIdRef.current;
+      if (!id || id !== args.projectId) throw new Error('Open that project first.');
+      return { id, name: projectNameRef.current, artboards: artboardsRef.current, openToken: projectOpenTokenRef.current };
+    }, captureForWebsite),
+    translateWebsiteDraft: async (args) => translateWebsiteDraft(args, () => {
+      const id = activeProjectIdRef.current;
+      if (!id || id !== args.projectId) throw new Error('Open that project first.');
+      return { id, name: projectNameRef.current, artboards: artboardsRef.current, openToken: projectOpenTokenRef.current };
+    }),
     updateWebsiteDraft: async (args) => {
       if (!await db.projects.get(args.projectId)) throw new Error('Project not found. Call list_projects for valid IDs.');
-      return updateWebsiteDraft(args);
+      return updateWebsiteDraft(args, () => {
+        if (activeProjectIdRef.current !== args.projectId) throw new Error('Open that project to edit website features.');
+        return siteBoards(artboardsRef.current).length;
+      });
     },
     getProjectSyncStatus: async () => {
       if (!activeProjectId || activeProjectIdRef.current !== activeProjectId) throw new Error('Open a project first.');
-      return summarizeSyncStatus({
+      const links = await readProjectSyncLinks(activeProjectId);
+      if (activeProjectIdRef.current !== activeProjectId) throw new Error('The open project changed. Read sync status again.');
+      return { ...summarizeSyncStatus({
         projectId: activeProjectId,
         accountConnected: isAccountConnected,
         accountProvider: accountSession?.provider ?? null,
@@ -11773,13 +11817,81 @@ const generateRandomProjectName = (): string => {
         cloudSignedIn: isCloudSignedIn,
         cloudEnabled: cloudAutoSave.enabled,
         cloudStatus: cloudAutoSave.status,
-      });
+      }), projectLinks: links, collaboration: { configured: collabRef.current.isConfigured, status: collabRef.current.status, peers: collabRef.current.peers.length, active: !!collabRef.current.room } };
     },
     pauseProjectAccountSync: async (args) => {
       if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
       const result = await pauseProjectAccountSync(args);
       if (!result.dryRun && activeProjectIdRef.current === args.projectId && getSessionGeneration() === result.sessionGeneration) accountSync.noteUnlinked();
       return result;
+    },
+    requestProjectAccountSync: async (args) => {
+      if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
+      if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      const snapshot = JSON.stringify([projectNameRef.current, artboardsRef.current]);
+      const plan = await previewAccountSync(args.projectId, snapshot);
+      if (args.dryRun !== false) return plan;
+      if (args.confirmed !== true || args.expectedPlan !== plan.expectedPlan) throw new Error('Confirm the unchanged preview before requesting sync.');
+      if (activeProjectIdRef.current !== args.projectId || getSessionGeneration() !== plan.expectedSessionGeneration || JSON.stringify([projectNameRef.current, artboardsRef.current]) !== snapshot) throw new Error('The project or account changed. Preview again.');
+      if (!accountSync.requestSyncNow()) throw new Error('Sync could not start. Check the sync status and try again.');
+      return { projectId: args.projectId, dryRun: false, requested: true, outcome: 'pending', remoteChecked: false };
+    },
+    resumeProjectAccountSync: async (args) => {
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      const result = await resumeProjectAccountSync(args);
+      if (!result.dryRun && !result.wasEnabled && activeProjectIdRef.current === args.projectId && getSessionGeneration() === result.sessionGeneration) accountSync.noteLinkEnabled(args.projectId);
+      return result;
+    },
+    setCloudProjectSharing: async (args) => {
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      if (args.dryRun !== false) return setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || activeProjectIdRef.current !== args.projectId);
+      if (cloudSharingWorkRef.current) throw new Error('A sharing change is already running.');
+      cloudSharingWorkRef.current = true;
+      try { return await setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || activeProjectIdRef.current !== args.projectId); }
+      finally { cloudSharingWorkRef.current = false; }
+    },
+    startProjectCollaboration: async (args) => {
+      if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
+      if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      if (!collabRef.current.isConfigured) throw new Error('Live editing is not available in this build.');
+      if (collabWorkRef.current || cloudSharingWorkRef.current || collabRef.current.room) throw new Error('A live editing or sharing action is already running.');
+      const snapshot = JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]);
+      const plan = await planExistingCollaboration(args.projectId, snapshot);
+      if (args.dryRun !== false) return { projectId: args.projectId, dryRun: true, expectedPlan: plan.expectedPlan, createsRoom: plan.createsRoom, joinsExistingRoom: !plan.createsRoom, mayChangeLocalProject: true };
+      if (args.confirmed !== true || args.expectedPlan !== plan.expectedPlan) throw new Error('Confirm the unchanged preview before starting live editing.');
+      if (collabWorkRef.current || cloudSharingWorkRef.current || collabRef.current.room || activeProjectIdRef.current !== args.projectId || getDiscoverSession() !== plan.session || JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]) !== snapshot) throw new Error('The project or session changed. Preview again.');
+      collabWorkRef.current = true;
+      setIsCollabWorking(true);
+      try {
+        let link = await db.cloudLinks.get(args.projectId);
+        if (!link || JSON.stringify(link) !== JSON.stringify(plan.link) || getDiscoverSession() !== plan.session || activeProjectIdRef.current !== args.projectId || JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]) !== snapshot) throw new Error('The project or collaboration link changed. Preview again.');
+        if (!link.collabKey) link = await setFirstCollaborationKey(args.projectId, JSON.stringify(link), newRoomKey());
+        if (getDiscoverSession() !== plan.session || activeProjectIdRef.current !== args.projectId || JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]) !== snapshot) throw new Error('The project or account changed. Inspect the room before retrying.');
+        collabProjectRef.current = args.projectId;
+        await collabRef.current.start(link.shareSlug, link.collabKey!);
+        if (activeProjectIdRef.current !== args.projectId || getDiscoverSession() !== plan.session) {
+          collabRef.current.stop();
+          throw new Error('The project or account changed while joining.');
+        }
+        setCollabInvite({ slug: link.shareSlug, key: link.collabKey! });
+        return { projectId: args.projectId, dryRun: false, started: true, connectionStatus: 'check_sync_status' };
+      } finally { collabWorkRef.current = false; setIsCollabWorking(false); }
+    },
+    stopProjectCollaboration: async (args) => {
+      if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
+      if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      const current = collabRef.current;
+      if (collabWorkRef.current) throw new Error('Wait for the live editing session to finish connecting.');
+      if (!current.room) return { projectId: args.projectId, dryRun: args.dryRun !== false, active: false };
+      const plan = await collaborationStopPlan(args.projectId, current.room, current.status, current.peers.length);
+      if (args.dryRun !== false) return { projectId: args.projectId, dryRun: true, active: true, peers: current.peers.length, expectedPlan: plan, revokesLink: false };
+      if (args.confirmed !== true || args.expectedPlan !== plan) throw new Error('Confirm the unchanged preview before leaving the session.');
+      if (collabWorkRef.current || collabRef.current !== current || activeProjectIdRef.current !== args.projectId) throw new Error('The live session changed. Preview again.');
+      current.stop();
+      return { projectId: args.projectId, dryRun: false, left: true, revokesLink: false };
     },
     openProject: async (projectId) => {
       // Parked in a tab: bring that tab back as it was, undo history and all,

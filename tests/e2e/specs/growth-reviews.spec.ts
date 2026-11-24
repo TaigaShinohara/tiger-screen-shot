@@ -261,6 +261,17 @@ test.describe('growth ratings and reviews', () => {
       await expect(view.locator('[data-review-id]')).toHaveCount(1);
     });
 
+    test('a prepared reply can be inspected without sending it', async ({ page }) => {
+      await putGrowthRows(page, { meta: [{ key: `review:draft:${CRASH.appId}:${encodeURIComponent(CRASH.id)}`, value: 'Thank you for telling us.' }] });
+      const view = await openApp(page);
+      await section(view, 'Reviews').click();
+      const card = view.locator(`[data-review-id="${CRASH.id}"]`);
+      await card.getByRole('button', { name: 'Use prepared reply' }).click();
+      await expect(card.getByRole('textbox', { name: 'Reply' })).toHaveValue('Thank you for telling us.');
+      await card.getByRole('button', { name: 'Cancel' }).click();
+      await expect(card.getByRole('button', { name: 'Use prepared reply' })).toBeVisible();
+    });
+
     test('a template from Replies fills a reply with the reviewer’s name, and counts its use', async ({ page }) => {
       const view = await openApp(page);
       await section(view, 'Replies').click();

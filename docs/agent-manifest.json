@@ -4,7 +4,7 @@
   "schema_version": 1,
   "agent_level": 0,
   "target_level": 2,
-  "level_note": "Website draft editing, Growth keyword tracking, and local sync inspection/pause have partial built-in agent access; other major workflows and the common contract remain incomplete.",
+  "level_note": "The optional CLI envelope is versioned. Website, Growth, sync and sharing now have built-in agent operations, subject to the operation catalog's limits and server deployment; complete app-wide L2 coverage is not yet established.",
   "guide": "docs/AGENT_GUIDE.md",
   "operations": "docs/AGENT_OPERATIONS.md",
   "commands": [
@@ -21,6 +21,7 @@
     "design",
     "edit",
     "call",
+    "desktop-call",
     "render",
     "video",
     "localize",
@@ -35,6 +36,7 @@
     "all"
   ],
   "json_schema_version": null,
+  "agent_json_schema_version": 1,
   "dry_run": [
     "upload",
     "cache prune",
@@ -50,14 +52,25 @@
     "tools": "cli/tools.json and live tools/list",
     "tools_generated_from": "editor MCP tool definitions",
     "built_in_agent_only": [
+      "create_website_draft",
+      "publish_website_draft",
+      "translate_website_draft",
       "get_website_draft",
       "update_website_draft",
       "get_project_sync_status",
+      "request_project_account_sync",
       "pause_project_account_sync",
+      "resume_project_account_sync",
+      "set_cloud_project_sharing",
+      "start_project_collaboration",
+      "stop_project_collaboration",
       "track_store_keywords",
       "untrack_store_keyword",
       "set_store_review_done",
-      "update_store_listing_drafts"
+      "prepare_store_review_reply",
+      "send_prepared_store_review_reply",
+      "update_store_listing_drafts",
+      "apply_store_listing_drafts"
     ],
     "growth_read_with_existing_permission": [
       "get_keyword_tracking",

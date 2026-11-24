@@ -10,13 +10,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { WebsitePublish } from '@/components/open-screenshot-generator/website/WebsitePublish';
 import { PrivacyQuestions } from '@/components/open-screenshot-generator/website/WebsiteShared';
 import { changeSite, setSiteStorage, SiteCopy, type SiteStorage, type StoredSite } from '@/lib/website/store';
-import { getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
+import { createWebsiteDraft, getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
+import { publishWebsiteDraft } from '@/lib/website/agentPublish';
+import { translateWebsiteDraft } from '@/lib/website/agentTranslate';
+import { acquireWebsitePublishLock } from '@/lib/website/publishLock';
 import { applyChanges, boardsFingerprint, captionOf, defaultContent, isLabel, newDraft, cleanText } from '@/lib/website/content';
 import { buildPolicy, cleanPrivacy, defaultPrivacy, policyStrings, serviceNames } from '@/lib/website/privacy';
 import { keepsAddresses, missingFor, prunedTranslations, sameLanguage, siteFingerprint, siteTexts, translator } from '@/lib/website/strings';
 import { pageDir, pageFile, relativeHref, renderPage, renderSiteFiles, renderStylesheet, shotPath } from '@/lib/website/render';
 import { gitBlobSha, isServing, publishSite, repoDescription, repoNameProblem, siteAddress, suggestedRepoName, GithubPublishError } from '@/lib/website/github';
-import { projectTranslations } from '@/lib/website/translate';
+import { mergeTranslationResult, projectTranslations } from '@/lib/website/translate';
 import { contrast, parseColor, paletteOf, suggestColours, boardColours } from '@/lib/website/theme';
 import { crc32, zipFiles } from '@/lib/website/zip';
 import { hash32 } from '@/lib/i18n/hash';
@@ -815,6 +818,43 @@ async function until(check: () => boolean): Promise<void> {
 
 const RECORD = { owner: 'octo', repo: 'pebble', branch: 'main', url: 'https://octo.github.io/pebble/', at: 1, build: 'b1', fingerprint: 'f', live: false };
 
+test('translation results preserve newer edits and merge unrelated new translations', () => {
+  const before = { 'de-DE': { one: 'old' } };
+  const current = { 'de-DE': { one: 'manual', other: 'kept' } };
+  const after = { 'de-DE': { one: 'automatic', two: 'new' } };
+  assert.deepEqual(mergeTranslationResult(current, before, after), { 'de-DE': { one: 'manual', other: 'kept', two: 'new' } });
+});
+
+test('agent translation requires an unchanged preview and keeps edits made during translation', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  const copy = new SiteCopy('p1', 60_000);
+  const project = { id: 'p1', name: 'Pebble', artboards: [board('b1')] };
+  let calls = 0;
+  try {
+    rows.set('p1', { projectId: 'p1', draft: draft(), chat: [], updatedAt: 0 });
+    copy.hold();
+    await until(() => copy.snapshot().loaded);
+    const key = hash32(copy.snapshot().draft!.content.headline);
+    const translate = async (site: SiteDraft) => {
+      calls += 1;
+      copy.update((current) => ({ ...current, translations: { ...current.translations, 'de-DE': { [key]: 'Manuell' } } }));
+      return { translations: { ...site.translations, 'de-DE': { [key]: 'Automatisch' } }, incomplete: [] };
+    };
+    const preview = await translateWebsiteDraft({ projectId: 'p1', locales: ['de-DE'] }, () => project, translate);
+    assert.equal(calls, 0);
+    assert.equal(preview.dryRun, true);
+    await assert.rejects(translateWebsiteDraft({ projectId: 'p1', locales: ['ar-SA'], dryRun: false, confirmed: true, expectedPlan: preview.expectedPlan }, () => project, translate), /unchanged preview/);
+    const result = await translateWebsiteDraft({ projectId: 'p1', locales: ['de-DE'], dryRun: false, confirmed: true, expectedPlan: preview.expectedPlan }, () => project, translate);
+    assert.equal(calls, 1);
+    assert.equal(result.requested, true);
+    assert.deepEqual(result.incomplete, ['de-DE']);
+    assert.equal(copy.snapshot().draft?.translations['de-DE'][key], 'Manuell');
+    await copy.flush();
+    assert.equal(rows.get('p1')?.draft.translations['de-DE'][key], 'Manuell');
+  } finally { await copy.release(); setSiteStorage(null); }
+});
+
 test('a result that lands while the site is on screen is written by a save straight after it', async () => {
   const { rows, storage } = memorySites();
   setSiteStorage(storage);
@@ -875,6 +915,66 @@ test('agent does not report a failed website read as a missing draft', async () 
   }
 });
 
+test('agent creates a website only for the unchanged project and preserves an existing draft', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  let project = { id: 'p1', name: 'Example', artboards: [board('board-1')] };
+  const readProject = () => project;
+  try {
+    const preview = await createWebsiteDraft({ projectId: 'p1' }, readProject);
+    assert.equal(rows.size, 0);
+    assert.equal(preview.privacyAnswered, false);
+    project = { ...project, name: 'Changed' };
+    await assert.rejects(createWebsiteDraft({ projectId: 'p1', ...preview, dryRun: false, confirmed: true }, readProject), /unchanged project/);
+    const next = await createWebsiteDraft({ projectId: 'p1' }, readProject);
+    await createWebsiteDraft({ projectId: 'p1', ...next, dryRun: false, confirmed: true }, readProject);
+    assert.equal(rows.get('p1')?.draft.facts.appName, 'Changed');
+    assert.equal(rows.get('p1')?.draft.privacy.answered, false);
+    assert.ok(!rows.get('p1')?.draft.content.faqs.some((faq) => faq.answer.includes("doesn't collect")));
+    await assert.rejects(createWebsiteDraft({ projectId: 'p1' }, readProject), /already has/);
+  } finally { setSiteStorage(null); }
+});
+
+test('website publishing previews without capturing and binds the target and content', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  try {
+    rows.set('p1', { projectId: 'p1', draft: draft(), chat: [], updatedAt: 0 });
+    const project = { id: 'p1', name: 'Pebble', artboards: [board('a')] };
+    let captures = 0;
+    const capture = async () => { captures++; return []; };
+    const args = { projectId: 'p1', owner: 'octo', repo: 'pebble', allowUntranslated: true };
+    const preview = await publishWebsiteDraft(args, () => project, capture);
+    assert.equal(preview.dryRun, true);
+    assert.equal(captures, 0);
+    await assert.rejects(publishWebsiteDraft({ ...args, repo: 'different', dryRun: false, confirmed: true, expectedPlan: preview.expectedPlan }, () => project, capture), /unchanged preview/);
+    assert.equal(captures, 0);
+    const release = await acquireWebsitePublishLock();
+    assert.ok(release);
+    assert.equal(await acquireWebsitePublishLock(), null);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const again = await acquireWebsitePublishLock();
+    assert.ok(again);
+    again();
+  } finally { setSiteStorage(null); }
+});
+
+test('a setup left open cannot replace a website created in the meantime', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  const copy = new SiteCopy('p1', 60_000);
+  try {
+    copy.hold();
+    await until(() => copy.snapshot().loaded);
+    const project = { id: 'p1', name: 'Example', artboards: [board('board-1')] };
+    const preview = await createWebsiteDraft({ projectId: 'p1' }, () => project);
+    await createWebsiteDraft({ projectId: 'p1', ...preview, dryRun: false, confirmed: true }, () => project);
+    assert.equal(copy.create(draft()), false);
+    assert.equal(rows.get('p1')?.draft.facts.appName, 'Example');
+  } finally { await copy.release(); setSiteStorage(null); }
+});
+
 test('agent previews, refuses stale edits and saves into the visible website', async () => {
   const { rows, storage } = memorySites();
   setSiteStorage(storage);
@@ -895,7 +995,25 @@ test('agent previews, refuses stale edits and saves into the visible website', a
     assert.equal(copy.snapshot().draft?.content.headline, 'New headline');
     assert.equal(rows.get('p1')?.draft.content.headline, 'New headline');
     assert.equal(rows.get('p1')?.draft.content.subhead, 'Another edit');
-    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { privacy: {} } }), /cannot be changed/);
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { privacy: {} } }), /supported privacy answers/);
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { privacy: { children: 'false' } }, sourceText: 'Not for children' }), /true or false/);
+    const privacy = { privacy: { uses: ['analytics'], services: { analytics: 'Example Analytics' }, children: false } };
+    const sourceText = 'The app uses Example Analytics and is not made for children.';
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: privacy, sourceText: 'It uses analytics.' }), /services in the developer/);
+    const privacyPlan = await updateWebsiteDraft({ projectId: 'p1', changes: privacy, sourceText });
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { privacy: { uses: [] } }, sourceText, ...privacyPlan, dryRun: false, confirmed: true }), /differ from the preview/);
+    await updateWebsiteDraft({ projectId: 'p1', changes: privacy, sourceText, ...privacyPlan, dryRun: false, confirmed: true });
+    assert.deepEqual(rows.get('p1')?.draft.privacy.uses, ['analytics']);
+    assert.equal(rows.get('p1')?.draft.privacy.services.analytics, 'Example Analytics');
+    const contact = await updateWebsiteDraft({ projectId: 'p1', changes: { supportEmail: 'other@example.com' }, sourceText: 'Use help@example.com' });
+    assert.ok(contact.refused.includes('support email'));
+    const featureChanges = { features: [{ title: 'Keep a streak', body: 'Every day', shot: 2 }], faqs: [{ question: 'Can I start again?', answer: 'Yes.' }] };
+    const featurePlan = await updateWebsiteDraft({ projectId: 'p1', changes: featureChanges }, () => 2);
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: featureChanges, ...featurePlan, dryRun: false, confirmed: true }, () => 3), /differ from the preview/);
+    await updateWebsiteDraft({ projectId: 'p1', changes: featureChanges, ...featurePlan, dryRun: false, confirmed: true }, () => 2);
+    assert.equal(rows.get('p1')?.draft.content.features[0].shot, 1);
+    assert.equal(rows.get('p1')?.draft.content.faqs[0].question, 'Can I start again?');
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { features: [{ title: 'Missing', shot: 3 }] } }, () => 2), /screenshot/);
   } finally { await copy.release(); setSiteStorage(null); }
 });
 

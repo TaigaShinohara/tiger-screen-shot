@@ -274,6 +274,15 @@ export const cloudApi = {
     };
   },
 
+  async setSharedConditional(id: string, projectId: string, expectedUpdated: string, on: boolean): Promise<{ visibility: CloudVisibility; shareSlug: string; updated: string }> {
+    requireSession();
+    const payload = await request<{ visibility: CloudVisibility; shareSlug: string; updated: string }>(`/api/openscreengen/projects/${encodeURIComponent(id)}/share-conditional`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, expectedUpdated, on }),
+    });
+    if ((payload.visibility !== 'private' && payload.visibility !== 'link') || typeof payload.shareSlug !== 'string' || typeof payload.updated !== 'string' || !payload.updated) throw new Error('The cloud did not confirm the sharing change.');
+    return payload;
+  },
+
   fetchDoc(id: string): Promise<Blob> {
     return requestBlob(`/api/openscreengen/projects/${encodeURIComponent(id)}/doc`, true);
   },
