@@ -151,3 +151,53 @@ test('verify enforces Play minimum counts per language and preserves unprefixed 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('verify strict treats warnings as failures while preserving the warning details', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-verify-strict-'));
+  try {
+    const image = png();
+    image[24] = 16;
+    fs.writeFileSync(path.join(root, '01_Hero.png'), image);
+    const ordinary = await jsonRun(verify, root, ['verify', root, '--json']);
+    assert.equal(ordinary.code, 0);
+    assert.equal(ordinary.result.ok, true);
+    assert.equal(ordinary.result.summary.warnings, 1);
+    const strict = await jsonRun(verify, root, ['verify', root, '--json', '--strict']);
+    assert.equal(strict.code, 3);
+    assert.equal(strict.result.ok, false);
+    assert.equal(strict.result.strict, true);
+    assert.equal(strict.result.summary.failures, 0);
+    assert.equal(strict.result.files[0].findings[0].code, 'png-bit-depth');
+    const disabled = await jsonRun(verify, root, ['verify', root, '--json', '--no-strict']);
+    assert.equal(disabled.code, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('fill can refuse a template that cannot place every input without overwriting a project', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-fill-all-'));
+  try {
+    const shots = path.join(root, 'shots');
+    const project = path.join(root, 'osg/project.json');
+    fs.mkdirSync(shots);
+    fs.mkdirSync(path.dirname(project));
+    fs.writeFileSync(project, 'original project');
+    for (let index = 1; index <= 5; index++) fs.writeFileSync(path.join(shots, `${index}.png`), png());
+    const args = ['fill', '--screenshots', shots, '--template', 'taiga-md3', '--format', 'ios', '--offline', '--force', '--json'];
+    const config = { templatesDir: path.join(repo, 'public/data/projects'), store: 'appstore' };
+    await assert.rejects(jsonRun(fill, root, [...args, '--require-all'], config), /1 of 5 screenshots do not fit/);
+    assert.equal(fs.readFileSync(project, 'utf8'), 'original project');
+    const partial = await jsonRun(fill, root, args, config);
+    assert.equal(partial.result.placed, 4);
+    assert.deepEqual(partial.result.unusedScreenshots, ['shots/5.png']);
+    fs.unlinkSync(path.join(shots, '5.png'));
+    const complete = await jsonRun(fill, root, [...args, '--require-all'], config);
+    assert.equal(complete.code, 0);
+    assert.deepEqual(complete.result.unusedScreenshots, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

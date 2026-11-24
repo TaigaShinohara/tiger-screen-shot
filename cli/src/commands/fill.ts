@@ -487,6 +487,15 @@ export async function run(ctx: CommandContext): Promise<number> {
     nameOverride: flagString(flags, 'name') ?? ctx.config.name ?? appName ?? undefined,
   });
 
+  const unusedShots = shots.slice(Math.min(shots.length, result.placed));
+  if (unusedShots.length && flagBool(flags, 'require-all')) {
+    throw usageError(
+      `${unusedShots.length} of ${shots.length} screenshots do not fit in this template.`,
+      'Choose a template with more device frames, or prepare the remaining screenshots separately.'
+    );
+  }
+  if (unusedShots.length) warn(`${unusedShots.length} input screenshots were not placed. Review the result before delivery.`);
+
   let preset = resolveFormat(flags.format, result.project, profile.device);
   // A store screenshot's dimensions are the store's, not a device's: Apple
   // renders a listing at whatever fits its box, and that reshaped aspect can
@@ -573,6 +582,7 @@ export async function run(ctx: CommandContext): Promise<number> {
       artboards: boards.map((board) => ({ id: board.id, name: board.name, width: board.size.width, height: board.size.height })),
       screenshots: file.osg.screenshots,
       placed: result.placed,
+      unusedScreenshots: unusedShots.map((shot) => path.relative(ctx.root, shot.file).split(path.sep).join('/')),
       unfilled: result.unfilled,
       trimmed: result.trimmed,
       swapped: result.swapped,

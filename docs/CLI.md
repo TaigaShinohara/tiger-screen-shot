@@ -263,8 +263,11 @@ one, then fills the chosen template and re-fits every text box so nothing clips.
 | `--template <id\|auto>` | Force a template, or let the ranking pick. Default `auto` |
 | `--instruction <text>` | Keywords that bias the ranking. Not a prompt, no model reads it |
 | `--top <n>` | Report the top n candidates instead of committing to one |
+| `--require-all` | Refuse before writing when the template cannot place every input screenshot |
 | `--dry-run` | Rank and report, write nothing |
 | `--json` | The ranking, the chosen template, and what was placed where |
+
+`fill` reports `unusedScreenshots` and warns when inputs do not fit. `--require-all` checks placement, not whether the copy and composition match the brief. A template can also contain decorative or demo content: inspect every exported image before delivery.
 
 Because the ranking is pure, `--dry-run --json` is repeatable and diffable, which
 is what makes it useful inside a bigger script.
@@ -435,13 +438,14 @@ frame rate, and the per locale set being complete.
 | `--json` | Every check, with the file it ran against |
 
 Exits `3` on a failure, `0` on a pass. It is the last step of `osg all` for that
-reason: a green pipeline means the files would survive review, not merely that
-they were written.
+reason: a green pipeline means the implemented file checks passed. It does not guarantee
+store acceptance or assess image content, readability, completeness against a brief,
+or full image decoding. Review the images and store requirements separately.
 
 ### `osg manifest`
 
 Writes `osg.manifest.json` next to the output: every file produced, its format,
-locale, board, dimensions, byte size and sha256, plus the config that produced it
+locale, board, dimensions and byte size, plus the config that produced it
 and the versions of the CLI and the editor bundle. This is the file a CI job
 publishes as its artefact and an agent reads instead of walking the tree.
 

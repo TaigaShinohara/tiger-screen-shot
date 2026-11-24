@@ -2,9 +2,11 @@
 
 Create App Store and Google Play screenshots and preview videos from editable artboards. Read [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md) before choosing a command and [CLI.md](CLI.md) for its full options. The machine-readable index is [agent-manifest.json](agent-manifest.json).
 
+The requested AI workflow ends with preparing and delivering verified store screenshots from real supplied captures. Preserve originals, plan phone and tablet layouts separately, inspect the actual images at thumbnail size and account for every requested screen. Do not submit or publish as part of delivery. Website, Growth and collaboration automation are outside this target.
+
 ## Level and interface
 
-Current strict level for the whole app is L0 with partial read, write and verification features; target L2. Non-streaming CLI commands support the optional versioned `--agent-json` envelope described below, while their inner data shapes remain command-specific. `desktop-call` can access supported operations in the running desktop app; file inspection and CLI history alone do not cover its IndexedDB projects or GUI/MCP operations. General dry runs and idempotency are not complete. Do not infer success from a command's name alone.
+The previous app-wide assessment is L0 with partial read, write and verification features. The current target is L2 for screenshot delivery; that narrower workflow is still being assessed. Non-streaming CLI commands support the optional versioned `--agent-json` envelope described below, while their inner data shapes remain command-specific. `desktop-call` can access supported operations in the running desktop app; file inspection and CLI history alone do not cover its IndexedDB projects or GUI/MCP operations. General dry runs and idempotency are not complete. Do not infer success from a command's name alone.
 
 | Command | Purpose |
 | --- | --- |
@@ -50,12 +52,12 @@ Pass `--agent-json` after a non-streaming command for a versioned result envelop
 3. Check exported files and investigate failures:
 
    ```sh
-   osg verify path/to/exports --store appstore --json
+   osg verify path/to/exports --store appstore --strict --json
    osg history --limit 20
    osg doctor --json
    ```
 
-   A failing verifier returns exit 3. `doctor` starts a browser and creates a temporary probe database. Keep command output when detailed failure text is needed. Check the images visually as well.
+   A failing verifier returns exit 3; `--strict` also fails on warnings. The verifier checks headers and selected rules, not the visual content or full image decoding. `doctor` starts a browser and creates a temporary probe database. Keep command output when detailed failure text is needed. Check the images visually as well.
 
 ## MCP and human actions
 

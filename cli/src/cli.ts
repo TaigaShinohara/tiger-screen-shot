@@ -69,7 +69,7 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'fill',
     summary: 'Rank every template against your screenshots and fill the best, offline and free',
-    usage: 'osg fill --screenshots <dir> [--template auto|<slug>] [--format <id>] [--templates-dir <dir>]',
+    usage: 'osg fill --screenshots <dir> [--template auto|<slug>] [--format <id>] [--templates-dir <dir>] [--require-all]',
     load: () => import('./commands/fill.js'),
   },
   {
@@ -117,7 +117,7 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'verify',
     summary: 'Audit the rendered files against the store rules. Exit 3 on a failure',
-    usage: 'osg verify [<dir>] [--store appstore|play] [--locales <codes>] [--formats <ids>] [--json]',
+    usage: 'osg verify [<dir>] [--store appstore|play] [--locales <codes>] [--formats <ids>] [--strict] [--json]',
     load: () => import('./commands/verify.js'),
   },
   {
