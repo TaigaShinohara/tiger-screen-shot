@@ -71,6 +71,8 @@
       "create_project_cloud_copy",
       "start_project_collaboration",
       "stop_project_collaboration",
+      "get_competitor_tracking",
+      "set_competitor_countries",
       "track_store_keywords",
       "untrack_store_keyword",
       "set_store_review_done",

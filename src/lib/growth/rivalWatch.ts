@@ -244,6 +244,28 @@ export async function changeRivalCountries(owner: string, change: (countries: st
   );
 }
 
+/** Read the existing list without interpreting malformed data as an empty list. */
+export async function readRivalListStrict(owner: string): Promise<RivalList> {
+  const raw = await readMeta<RivalList>(rivalKeys.list(owner));
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.rivals) || !Array.isArray(raw.countries) || !raw.countries.every((code) => typeof code === 'string')) {
+    throw new Error('The competitor list is missing or unreadable. Open Competitors first.');
+  }
+  return { ...raw, owner };
+}
+
+/** Apply a previewed country change in the same turn as GUI list updates. */
+export async function setRivalCountriesIfUnchanged(owner: string, expected: string, countries: string[]): Promise<RivalList> {
+  const result = await withListLock(async () => {
+    const current = await readRivalListStrict(owner);
+    if (JSON.stringify(current) !== expected) throw new Error('The competitor list changed. Preview again.');
+    const next = { ...current, countries };
+    await writeMeta(rivalKeys.list(owner), next);
+    return next;
+  });
+  announce('data');
+  return result;
+}
+
 /** Name the user's own app, on the App Store or Google Play, for a list with no Growth app. Null forgets it. */
 export async function setYourApp(owner: string, candidate: RivalCandidate | null, countries: string[]): Promise<void> {
   const named: { before?: string } = {};

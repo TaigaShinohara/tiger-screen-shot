@@ -2,6 +2,8 @@ import { resolveApp } from './agentTools';
 import { MAX_KEYWORDS, MAX_KEYWORD_COUNTRIES, normalizeTerm, parseKeywordInput } from './keywords';
 import { isAppStoreId, planTrackedKeywords, readKeywordList, trackKeywords, untrackKeywordIfUnchanged } from './keywordWatch';
 import { TERRITORY_CODES } from './territories';
+import { MAX_RIVAL_COUNTRIES } from './rivals';
+import { readRivalListStrict, setRivalCountriesIfUnchanged } from './rivalWatch';
 import { announceGrowthChange, readListing, readMeta, readReviewMarks, readReviews, readReviewReplyDraft, removeReviewReplyDraftIfSame, updateExistingReviewMark, updateReviewReplyDraft, writeListing, writeMeta, writeReviewResponseIfUnchanged } from './db';
 import { markedDone } from './reviewInbox';
 import { listingFieldEditable, listingFieldLabel, listingFieldsFor, listingLimit } from './listingFields';
@@ -45,6 +47,31 @@ async function appIdOf(value: unknown): Promise<string> {
   const app = await resolveApp(value);
   if (app.id !== value) throw new Error('No connected app has that ID.');
   return app.id;
+}
+
+export async function getCompetitorTracking(args: { appId?: unknown }) {
+  if (typeof args.appId !== 'string' || !args.appId.trim()) throw new Error('Pass an exact app ID.');
+  const app = await resolveApp(args.appId);
+  if (app.id !== args.appId) throw new Error('Pass an exact app ID.');
+  const list = await readRivalListStrict(app.id);
+  return { appId: app.id, countries: list.countries, rivals: list.rivals, checkedAt: list.checkedAt ?? null };
+}
+
+export async function setCompetitorCountries(args: { appId?: unknown; countries?: unknown; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }) {
+  if (typeof args.appId !== 'string' || !args.appId.trim()) throw new Error('Pass an exact app ID.');
+  if (!Array.isArray(args.countries) || !args.countries.length || args.countries.length > MAX_RIVAL_COUNTRIES || !args.countries.every((code) => typeof code === 'string' && TERRITORY_CODES.includes(code.toUpperCase()))) throw new Error('Pass 1 to 20 supported country codes.');
+  if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
+  if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
+  const app = await resolveApp(args.appId);
+  if (app.id !== args.appId) throw new Error('Pass an exact app ID.');
+  const countries = [...new Set((args.countries as string[]).map((code) => code.toUpperCase()))];
+  const current = await readRivalListStrict(app.id);
+  const snapshot = JSON.stringify(current);
+  const expectedPlan = await hashSnapshot(JSON.stringify([app.id, snapshot, countries]));
+  if (args.dryRun !== false) return { appId: app.id, dryRun: true, currentCountries: current.countries, countries, expectedPlan, laterChecksContactStores: true };
+  if (args.confirmed !== true || args.expectedPlan !== expectedPlan) throw new Error('Confirm the unchanged preview before changing countries.');
+  const saved = await setRivalCountriesIfUnchanged(app.id, snapshot, countries);
+  return { appId: app.id, dryRun: false, countries: saved.countries, laterChecksContactStores: true };
 }
 
 export async function getKeywordTracking(args: { appId?: unknown }) {

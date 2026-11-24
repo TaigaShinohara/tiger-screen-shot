@@ -112,7 +112,7 @@ test('AI run summaries omit prompts, provider replies and error details', async 
 
 test('external clients cannot mutate Growth keywords', async () => {
   const { api } = fakeApi();
-  for (const name of ['track_store_keywords', 'untrack_store_keyword', 'set_store_review_done', 'update_store_listing_drafts', 'prepare_store_review_reply', 'apply_store_listing_drafts']) {
+  for (const name of ['get_competitor_tracking', 'set_competitor_countries', 'track_store_keywords', 'untrack_store_keyword', 'set_store_review_done', 'update_store_listing_drafts', 'prepare_store_review_reply', 'apply_store_listing_drafts']) {
     const result = await handleMcpMessage(call(name, { appId: '123', terms: ['test'], term: 'test', dryRun: false, confirmed: true }), api, { agent: false });
     assert.equal((result as CallResult).result?.isError, true);
   }
