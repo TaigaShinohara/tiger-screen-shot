@@ -128,7 +128,7 @@ test('review reply templates remain private to built-in agents', async () => {
 
 test('website and sync data are restricted to built-in agents', async () => {
   const { api, calls } = fakeApi();
-  for (const name of ['get_website_draft', 'update_website_draft', 'get_project_sync_status', 'pause_project_account_sync']) {
+  for (const name of ['get_website_draft', 'update_website_draft', 'get_project_sync_status', 'pause_project_account_sync', 'create_project_cloud_copy']) {
     const result = await handleMcpMessage(call(name, { projectId: 'p1', changes: { headline: 'Test' } }), api, { agent: false });
     assert.equal((result as CallResult).result?.isError, true);
   }

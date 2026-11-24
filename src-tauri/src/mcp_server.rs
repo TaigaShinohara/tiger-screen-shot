@@ -85,6 +85,7 @@ const SLOW_TOOLS: &[&str] = &[
     "apply_store_listing_drafts",
     "publish_website_draft",
     "set_cloud_project_sharing",
+    "create_project_cloud_copy",
     "start_project_collaboration",
     "translate_website_draft",
     "send_prepared_store_review_reply",
@@ -822,6 +823,7 @@ mod tests {
         assert_eq!(timeout_for(&call("apply_store_listing_drafts")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("publish_website_draft")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("set_cloud_project_sharing")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("create_project_cloud_copy")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("start_project_collaboration")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("translate_website_draft")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("send_prepared_store_review_reply")), SLOW_RESPONSE_TIMEOUT);

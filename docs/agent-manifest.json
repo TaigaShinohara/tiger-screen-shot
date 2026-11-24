@@ -68,6 +68,7 @@
       "pause_project_account_sync",
       "resume_project_account_sync",
       "set_cloud_project_sharing",
+      "create_project_cloud_copy",
       "start_project_collaboration",
       "stop_project_collaboration",
       "track_store_keywords",

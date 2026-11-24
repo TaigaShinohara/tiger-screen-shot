@@ -46,6 +46,67 @@
 
 // ---------- the account's own projects ----------
 
+// A separate create-only route: older servers cannot mistake the request for
+// the legacy upsert, and the unique owner/project index protects races.
+routerAdd('POST', '/api/openscreengen/projects/create-only', (e) => {
+  const openscreengen = require(`${__hooks}/lib/openscreengen.js`);
+  const config = openscreengen.settings($app);
+  if (!config.cloud_projects_enabled) return e.json(503, { error: 'cloud projects are switched off' });
+  if (!config.writes_enabled) return e.json(503, { error: 'this box is read only right now' });
+  const auth = openscreengen.authUser($app, e);
+  if (auth.fail) return e.json(auth.fail.status, { error: auth.fail.error });
+  const rawId = openscreengen.formValue(e, 'project_id');
+  const projectId = openscreengen.clampText(rawId, 120);
+  if (!projectId || projectId !== rawId) return e.json(400, { error: 'that save needs a valid project id' });
+  const files = e.findUploadedFiles('doc');
+  if (!files || !files.length) return e.json(400, { error: 'that save carried no project data' });
+  const doc = files[0];
+  if (doc.size > config.max_cloud_doc_bytes) return e.json(413, { error: 'that project document is too large to store here' });
+  let wanted;
+  try { wanted = JSON.parse(openscreengen.formValue(e, 'manifest_assets') || '[]'); }
+  catch { return e.json(400, { error: 'the project file list is invalid' }); }
+  if (!Array.isArray(wanted) || wanted.length > 200) return e.json(400, { error: 'the project file list is invalid' });
+  const missing = [];
+  const seen = {};
+  for (const entry of wanted) {
+    const raw = entry && entry.id;
+    const id = openscreengen.clampText(raw, 120);
+    if (!id || id !== raw || seen[id] || !['font', 'media'].includes(entry.kind)) return e.json(400, { error: 'the project file list is invalid' });
+    seen[id] = true;
+    missing.push({ id, kind: entry.kind });
+  }
+  let saved = null;
+  let refusal = null;
+  try {
+    $app.runInTransaction((txApp) => {
+      const existing = txApp.findRecordsByFilter('cloud_projects', 'owner = {:u} && project_id = {:p}', '', 1, 0, { u: auth.user.id, p: projectId });
+      if (existing.length) { refusal = { status: 409, error: 'a cloud copy already exists; open it before saving' }; return; }
+      const owned = txApp.findRecordsByFilter('cloud_projects', 'owner = {:u}', '', config.max_cloud_projects, 0, { u: auth.user.id });
+      if (owned.length >= config.max_cloud_projects) { refusal = { status: 409, error: 'the cloud project limit has been reached' }; return; }
+      const row = new Record(txApp.findCollectionByNameOrId('cloud_projects'));
+      row.set('owner', auth.user.id);
+      row.set('project_id', projectId);
+      row.set('visibility', 'private');
+      row.set('share_slug', '');
+      row.set('hidden', false);
+      row.set('name', openscreengen.clampText(openscreengen.formValue(e, 'name'), 120) || 'Untitled project');
+      row.set('doc', doc);
+      row.set('doc_bytes', doc.size);
+      row.set('doc_encoding', openscreengen.formValue(e, 'doc_encoding') === 'gzip' ? 'gzip' : 'none');
+      row.set('boards', Math.max(0, Math.min(500, Number(openscreengen.formValue(e, 'boards')) || 0)));
+      row.set('format_version', Math.max(1, Math.min(99, Number(openscreengen.formValue(e, 'format_version')) || 1)));
+      txApp.save(row);
+      saved = openscreengen.cloudProjectOf(row, [], { owner: true, assets: true });
+    });
+  } catch {
+    console.warn('openscreengen: could not create a cloud project');
+    return e.json(500, { error: 'the cloud copy could not be confirmed; check before retrying' });
+  }
+  if (refusal) return e.json(refusal.status, { error: refusal.error });
+  if (!saved) return e.json(500, { error: 'the cloud copy could not be confirmed; check before retrying' });
+  return e.json(200, { project: saved, missing });
+}, $apis.bodyLimit(20 * 1024 * 1024));
+
 routerAdd('GET', '/api/openscreengen/projects', (e) => {
   const openscreengen = require(`${__hooks}/lib/openscreengen.js`);
   const config = openscreengen.settings($app);

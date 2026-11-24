@@ -226,6 +226,7 @@ import { translateWebsiteDraft } from '@/lib/website/agentTranslate';
 import { siteBoards } from '@/lib/website/content';
 import { readProjectSyncLinks, summarizeSyncStatus } from '@/lib/agentSyncStatus';
 import { setAgentCloudSharing } from '@/lib/cloud/agentShare';
+import { cloudCreatePorts, createAgentCloudCopy } from '@/lib/cloud/agentCreate';
 import { pauseProjectAccountSync, previewAccountSync, resumeProjectAccountSync } from '@/lib/account/agentSync';
 import { getSessionGeneration } from '@/lib/account/store';
 import { captureTargets } from '@/lib/capture/frames';
@@ -1176,6 +1177,7 @@ export function OpenScreenshotGeneratorLayout() {
   const [isCollabWorking, setIsCollabWorking] = useState(false);
   const collabWorkRef = useRef(false);
   const cloudSharingWorkRef = useRef(false);
+  const cloudSaveWorkRef = useRef(false);
   /**
    * The room this project has an invite for, whether or not a session is up.
    *
@@ -5407,7 +5409,8 @@ export function OpenScreenshotGeneratorLayout() {
    * conflict dialog has been answered.
    */
   const runCloudSave = async (force = false): Promise<boolean> => {
-    if (!activeProjectId) return false;
+    if (!activeProjectId || cloudSaveWorkRef.current || collabWorkRef.current || cloudSharingWorkRef.current) return false;
+    cloudSaveWorkRef.current = true;
     setIsSavingToCloud(true);
     try {
       // saveProjectToCloud reads the stored row; commit pending edits first.
@@ -5433,6 +5436,7 @@ export function OpenScreenshotGeneratorLayout() {
       handleCloudError(error, 'Could not save to the cloud');
       return false;
     } finally {
+      cloudSaveWorkRef.current = false;
       setIsSavingToCloud(false);
     }
   };
@@ -5462,6 +5466,7 @@ export function OpenScreenshotGeneratorLayout() {
    * the most confusing possible outcome of clicking this.
    */
   const handleCopyProjectLink = async () => {
+    if (cloudSaveWorkRef.current || collabWorkRef.current || cloudSharingWorkRef.current) return;
     if (!isCloudSignedIn) {
       requireCloudSignIn('Sign in to get a shareable link for this project.');
       return;
@@ -5477,14 +5482,14 @@ export function OpenScreenshotGeneratorLayout() {
 
     // Already shared: copy what exists rather than minting a new slug, which
     // would break a link somebody has already been sent.
-    const existing = await getCloudLink(activeProjectId, discoverSession?.viewer?.id ?? null);
-    if (existing?.visibility === 'link' && existing.shareSlug) {
-      await copyShareUrl(buildShareUrl(existing.shareSlug));
-      return;
-    }
-
+    cloudSaveWorkRef.current = true;
     setIsSavingToCloud(true);
     try {
+      const existing = await getCloudLink(activeProjectId, discoverSession?.viewer?.id ?? null);
+      if (existing?.visibility === 'link' && existing.shareSlug) {
+        await copyShareUrl(buildShareUrl(existing.shareSlug));
+        return;
+      }
       // saveProjectToCloud reads the stored row; commit pending edits first.
       await flushProjectSave();
       const saved = await saveProjectToCloud(activeProjectId, { force: !!existing, origin: 'manual' });
@@ -5499,6 +5504,7 @@ export function OpenScreenshotGeneratorLayout() {
         handleCloudError(error, 'Could not create a link');
       }
     } finally {
+      cloudSaveWorkRef.current = false;
       setIsSavingToCloud(false);
     }
   };
@@ -5546,7 +5552,7 @@ export function OpenScreenshotGeneratorLayout() {
    * link handed out so far open nothing at all.
    */
   const startCollabSession = async (options: { rotate?: boolean } = {}) => {
-    if (collabWorkRef.current || cloudSharingWorkRef.current) return;
+    if (collabWorkRef.current || cloudSharingWorkRef.current || cloudSaveWorkRef.current) return;
     if (!isCloudAvailable) return;
     if (!isCloudSignedIn) {
       requireCloudSignIn('Sign in to edit this project with other people.');
@@ -11863,23 +11869,40 @@ const generateRandomProjectName = (): string => {
     },
     setCloudProjectSharing: async (args) => {
       if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
-      if (args.dryRun !== false) return setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || activeProjectIdRef.current !== args.projectId);
+      if (args.dryRun !== false) return setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || cloudSaveWorkRef.current || activeProjectIdRef.current !== args.projectId);
       if (cloudSharingWorkRef.current) throw new Error('A sharing change is already running.');
       cloudSharingWorkRef.current = true;
-      try { return await setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || activeProjectIdRef.current !== args.projectId); }
+      try { return await setAgentCloudSharing(args, () => collabRoomActiveRef.current || collabWorkRef.current || cloudSaveWorkRef.current || activeProjectIdRef.current !== args.projectId); }
       finally { cloudSharingWorkRef.current = false; }
+    },
+    createProjectCloudCopy: async (args) => {
+      const readProject = () => {
+        const id = activeProjectIdRef.current;
+        if (!id || id !== args.projectId || loadedProjectIdRef.current !== id || collabRoomActiveRef.current || collabWorkRef.current || cloudSharingWorkRef.current) throw new Error('Open that project and stop live editing or sharing first.');
+        return { id, name: projectNameRef.current, artboards: artboardsRef.current, openToken: projectOpenTokenRef.current };
+      };
+      const ports = cloudCreatePorts(readProject, flushProjectSave);
+      if (args.dryRun !== false) return createAgentCloudCopy(args, ports);
+      if (cloudSaveWorkRef.current) throw new Error('Another cloud save is running.');
+      cloudSaveWorkRef.current = true;
+      setIsSavingToCloud(true);
+      try {
+        const result = await createAgentCloudCopy(args, ports);
+        if (result.saved && activeProjectIdRef.current === args.projectId) { cloudAutoSave.noteSaved(args.projectId); await refreshCloudLink(); }
+        return result;
+      } finally { cloudSaveWorkRef.current = false; setIsSavingToCloud(false); }
     },
     startProjectCollaboration: async (args) => {
       if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
       if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
       if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
       if (!collabRef.current.isConfigured) throw new Error('Live editing is not available in this build.');
-      if (collabWorkRef.current || cloudSharingWorkRef.current || collabRef.current.room) throw new Error('A live editing or sharing action is already running.');
+      if (collabWorkRef.current || cloudSharingWorkRef.current || cloudSaveWorkRef.current || collabRef.current.room) throw new Error('A live editing or sharing action is already running.');
       const snapshot = JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]);
       const plan = await planExistingCollaboration(args.projectId, snapshot);
       if (args.dryRun !== false) return { projectId: args.projectId, dryRun: true, expectedPlan: plan.expectedPlan, createsRoom: plan.createsRoom, joinsExistingRoom: !plan.createsRoom, mayChangeLocalProject: true };
       if (args.confirmed !== true || args.expectedPlan !== plan.expectedPlan) throw new Error('Confirm the unchanged preview before starting live editing.');
-      if (collabWorkRef.current || cloudSharingWorkRef.current || collabRef.current.room || activeProjectIdRef.current !== args.projectId || getDiscoverSession() !== plan.session || JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]) !== snapshot) throw new Error('The project or session changed. Preview again.');
+      if (collabWorkRef.current || cloudSharingWorkRef.current || cloudSaveWorkRef.current || collabRef.current.room || activeProjectIdRef.current !== args.projectId || getDiscoverSession() !== plan.session || JSON.stringify([projectNameRef.current, artboardsRef.current, projectOpenTokenRef.current]) !== snapshot) throw new Error('The project or session changed. Preview again.');
       collabWorkRef.current = true;
       setIsCollabWorking(true);
       try {

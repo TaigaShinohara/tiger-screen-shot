@@ -140,6 +140,14 @@ export async function putCloudLink(
   }
 }
 
+/** A first save may not replace a link another operation created while it was sending. */
+export async function putCloudLinkIfAbsent(projectId: string, accountId: string, project: CloudProject, pendingAssets: string[]): Promise<void> {
+  await db.transaction('rw', db.cloudLinks, async () => {
+    if (await db.cloudLinks.get(projectId)) throw new Error('The local cloud link changed while saving. Check the cloud before retrying.');
+    await db.cloudLinks.add({ projectId, accountId, recordId: project.id, autoSaveConsent: 'manual-save', savedAt: new Date(), remoteUpdated: project.updated, visibility: project.visibility, shareSlug: project.shareSlug ?? '', pendingAssets });
+  });
+}
+
 /**
  * Update just the sharing half, after the share toggle.
  *

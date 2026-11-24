@@ -42,6 +42,7 @@ const SLOW_TOOLS = new Set([
   'apply_store_listing_drafts',
   'publish_website_draft',
   'set_cloud_project_sharing',
+  'create_project_cloud_copy',
   'start_project_collaboration',
   'translate_website_draft',
   'send_prepared_store_review_reply',
