@@ -4,7 +4,7 @@
   "schema_version": 1,
   "agent_level": 0,
   "target_level": 2,
-  "level_note": "The optional CLI envelope is versioned. Website, Growth, sync and sharing now have built-in agent operations, subject to the operation catalog's limits and server deployment; complete app-wide L2 coverage is not yet established.",
+  "level_note": "Target scope: prepare, inspect and deliver store screenshots from supplied captures. End-to-end verification for all requested device layouts is still incomplete; app-wide L2 is not claimed.",
   "guide": "docs/AGENT_GUIDE.md",
   "operations": "docs/AGENT_OPERATIONS.md",
   "commands": [

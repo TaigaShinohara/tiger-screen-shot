@@ -18,12 +18,11 @@
  * size, so "too few to publish" is not a fact about any one PNG, which is what
  * checkScreenshotCount and the grouping below exist for.
  *
- * Warnings never fail the run. A 9 MB PNG is worth saying out loud and is not
- * worth failing somebody's release build over.
+ * Warnings fail the run only when --strict is set.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { flagList, flagString } from '../args.js';
+import { flagBool, flagList, flagString } from '../args.js';
 import { DEVICE_FORMAT_PRESETS } from '@/lib/deviceRegistry';
 import { DEFAULTS } from '../config.js';
 import type { CommandContext } from '../context.js';
@@ -271,6 +270,7 @@ function printTable(rows: FileReport[], sets: SetReport[]): void {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export async function run(ctx: CommandContext): Promise<number> {
+  const strict = flagBool(ctx.args.flags, 'strict');
   const store = resolveStore(flagString(ctx.args.flags, 'store') ?? ctx.config.store ?? DEFAULTS.store);
   const ruleset = rulesetFor(store);
   const dir = path.resolve(ctx.root, ctx.args.positionals[0] ?? ctx.outDir);
@@ -328,6 +328,7 @@ export async function run(ctx: CommandContext): Promise<number> {
     sets.filter((set) => set.level === 'warn').length +
     listing.filter((finding) => finding.level === 'warn').length;
   const passed = rows.length - rows.filter((row) => row.level !== 'ok').length;
+  const accepted = failures === 0 && (!strict || warnings === 0);
   const summary =
     `${plural(rows.length, 'file')} in ${plural(sets.length, 'set')}, ` +
     `${passed} ok, ${plural(warnings, 'warning')}, ${plural(failures, 'failure')}`;
@@ -337,7 +338,8 @@ export async function run(ctx: CommandContext): Promise<number> {
       command: 'verify',
       store,
       dir,
-      ok: failures === 0,
+      ok: accepted,
+      strict,
       summary: { files: rows.length, ok: passed, warnings, failures },
       files: rows,
       sets,
@@ -346,10 +348,10 @@ export async function run(ctx: CommandContext): Promise<number> {
   } else {
     printTable(rows, sets);
     for (const finding of listing) info(`  ${badge(finding.level)}  ${paint(finding)}`);
-    if (failures > 0) fail(summary);
+    if (!accepted) fail(summary);
     else if (warnings > 0) warn(summary);
     else ok(summary);
   }
 
-  return failures > 0 ? EXIT.verify : EXIT.ok;
+  return accepted ? EXIT.ok : EXIT.verify;
 }
