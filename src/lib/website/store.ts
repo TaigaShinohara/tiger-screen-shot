@@ -137,6 +137,25 @@ export async function readCurrentSite(projectId: string): Promise<SiteRowData | 
   return current.draft ? { draft: current.draft, chat: current.chat } : null;
 }
 
+export async function createCurrentSite(draft: SiteDraft): Promise<void> {
+  const holder = holders.get(draft.projectId);
+  if (holder) {
+    const current = holder.snapshot();
+    if (!current.loaded) throw new Error('The website is still loading. Try again shortly.');
+    if (current.readFailed) throw new Error('The website could not be read.');
+    if (current.draft) throw new Error('This project already has a website draft.');
+    if (!holder.create(draft)) throw new Error('The website changed. Read it before retrying.');
+    try { await holder.flushStrict(); }
+    catch { throw new Error('The website appeared in the editor but could not be saved. Read it before retrying.'); }
+    return;
+  }
+  await sites().transaction(async (tx) => {
+    if (await tx.get(draft.projectId)) throw new Error('This project already has a website draft.');
+    if (holders.has(draft.projectId)) throw new Error('The website opened while it was being created. Try again.');
+    await tx.put(storedSite(draft, []));
+  });
+}
+
 /**
  * Change a project's site and conversation, wherever the site is: in the
  * Website view when it holds that project, or else in the database, read and
@@ -315,11 +334,13 @@ export class SiteCopy {
   };
 
   /** Start a site for the project, saved at once. */
-  create = (draft: SiteDraft): void => {
+  create = (draft: SiteDraft): boolean => {
+    if (!this.state.loaded || this.state.readFailed || this.state.draft) return false;
     this.ready = true;
     this.set({ ...this.state, loaded: true, readFailed: false, draft });
     this.dirty = true;
     void this.flush();
+    return true;
   };
 
   private schedule(): void {
@@ -358,7 +379,7 @@ export interface SiteState {
   /** Change the site. Saved a moment later, and at once when the view goes. */
   update: (change: (draft: SiteDraft) => SiteDraft) => void;
   /** Start a site for the project, saved at once. */
-  create: (draft: SiteDraft) => void;
+  create: (draft: SiteDraft) => boolean;
   setChat: (change: (chat: SiteChatItem[]) => SiteChatItem[]) => void;
 }
 

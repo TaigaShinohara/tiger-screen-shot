@@ -169,11 +169,13 @@ export function defaultFaqs(facts: SiteFacts, privacy: PrivacyAnswers): SiteFaq[
       answer: `${email ? `Email us at ${email}` : 'Email us'} from the address you signed up with, and we'll delete your account and the data that goes with it.`,
     });
   }
-  faqs.push(
-    privacy.uses.length === 0
-      ? { question: `Does ${app} collect my data?`, answer: `No. ${app} doesn't collect any personal data. The privacy policy explains it in full.` }
-      : { question: `What data does ${app} collect?`, answer: 'Only what the app needs to work. The privacy policy lists all of it.' }
-  );
+  if (privacy.answered) {
+    faqs.push(
+      privacy.uses.length === 0
+        ? { question: `Does ${app} collect my data?`, answer: `No. ${app} doesn't collect any personal data. The privacy policy explains it in full.` }
+        : { question: `What data does ${app} collect?`, answer: 'Only what the app needs to work. The privacy policy lists all of it.' }
+    );
+  }
   faqs.push({
     question: 'I found a bug. What should I do?',
     answer: `Please ${writeTo}. Tell us what you did, what happened and which device you use. A screenshot helps a lot.`,

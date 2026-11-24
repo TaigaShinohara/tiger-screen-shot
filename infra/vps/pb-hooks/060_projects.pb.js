@@ -398,13 +398,7 @@ routerAdd('PUT', '/api/openscreengen/projects/{id}/share', (e) => {
   const body = openscreengen.readBody(e) || {};
   const on = body.on === true || body.on === 'true';
 
-  if (on) {
-    row.set('visibility', 'link');
-    row.set('share_slug', openscreengen.newShareSlug());
-  } else {
-    row.set('visibility', 'private');
-    row.set('share_slug', '');
-  }
+  require(`${__hooks}/lib/cloudSharing.js`).setSharing(row, on, openscreengen.newShareSlug);
 
   try {
     $app.save(row);
@@ -421,6 +415,39 @@ routerAdd('PUT', '/api/openscreengen/projects/{id}/share', (e) => {
     // somebody else's.
     updated: row.getDateTime('updated').string(),
   });
+});
+
+routerAdd('PUT', '/api/openscreengen/projects/{id}/share-conditional', (e) => {
+  const openscreengen = require(`${__hooks}/lib/openscreengen.js`);
+  const config = openscreengen.settings($app);
+  if (!config.cloud_projects_enabled) return e.json(503, { error: 'cloud projects are switched off' });
+  if (!config.writes_enabled) return e.json(503, { error: 'this box is read only right now' });
+  const auth = openscreengen.authUser($app, e);
+  if (auth.fail) return e.json(auth.fail.status, { error: auth.fail.error });
+  const body = openscreengen.readBody(e) || {};
+  const projectId = openscreengen.clampText(body.projectId, 120);
+  const expectedUpdated = typeof body.expectedUpdated === 'string' ? body.expectedUpdated : '';
+  if (!projectId || !expectedUpdated || typeof body.on !== 'boolean') return e.json(400, { error: 'that request is missing the project, revision or sharing choice' });
+  let result = null;
+  let refusal = null;
+  try {
+    $app.runInTransaction((txApp) => {
+      const row = openscreengen.ownedProject(txApp, e.request.pathValue('id'), auth.user.id);
+      if (!row || row.getString('project_id') !== projectId) { refusal = { status: 404, error: 'no such project' }; return; }
+      if (row.getDateTime('updated').string() !== expectedUpdated) { refusal = { status: 409, error: 'this project changed on another device' }; return; }
+      const currentlyOn = row.getString('visibility') === 'link';
+      if (currentlyOn !== body.on) {
+        require(`${__hooks}/lib/cloudSharing.js`).setSharing(row, body.on, openscreengen.newShareSlug);
+        txApp.save(row);
+      }
+      result = { visibility: row.getString('visibility'), shareSlug: row.getString('share_slug'), updated: row.getDateTime('updated').string() };
+    });
+  } catch (error) {
+    console.warn('openscreengen: could not change project sharing', error);
+    return e.json(500, { error: 'that could not be changed' });
+  }
+  if (refusal) return e.json(refusal.status, { error: refusal.error });
+  return e.json(200, result);
 });
 
 routerAdd('GET', '/api/openscreengen/projects/{id}/doc', (e) => {

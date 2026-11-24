@@ -98,7 +98,7 @@ test('AI run summaries omit prompts, provider replies and error details', async 
 
 test('external clients cannot mutate Growth keywords', async () => {
   const { api } = fakeApi();
-  for (const name of ['track_store_keywords', 'untrack_store_keyword', 'set_store_review_done', 'update_store_listing_drafts']) {
+  for (const name of ['track_store_keywords', 'untrack_store_keyword', 'set_store_review_done', 'update_store_listing_drafts', 'prepare_store_review_reply', 'apply_store_listing_drafts']) {
     const result = await handleMcpMessage(call(name, { appId: '123', terms: ['test'], term: 'test', dryRun: false, confirmed: true }), api, { agent: false });
     assert.equal((result as CallResult).result?.isError, true);
   }
@@ -355,6 +355,15 @@ test('MCP destructive design tools require confirmation', async () => {
   const allowed = await handleMcpMessage(call('delete_element', { elementId: 'e1', confirmed: true }), api);
   assert.notEqual((allowed as CallResult).result?.isError, true);
   assert.equal(calls.includes('deleteElement'), true);
+});
+
+test('sending a prepared public reply is listed but refused to external MCP clients', async () => {
+  const listed = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, null) as { result: { tools: Array<{ name: string }> } };
+  assert.ok(listed.result.tools.some((entry) => entry.name === 'send_prepared_store_review_reply'));
+  const { api } = fakeApi();
+  const result = await handleMcpMessage(call('send_prepared_store_review_reply', { appId: '123', reviewId: 'review', dryRun: false, confirmed: true }), api, { agent: false });
+  assert.equal((result as CallResult).result?.isError, true);
+  assert.match(textOf(result), /Only the app's own agents/);
 });
 
 test('import_project_image is listed for every client and works only for the agent in the desktop app', async () => {

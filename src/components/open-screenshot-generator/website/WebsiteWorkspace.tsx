@@ -50,7 +50,9 @@ import { getLocaleDef } from '@/lib/i18n/locales';
 import { projectArtboards } from '@/lib/i18n/project';
 import { useStoreCredentials } from '@/lib/publish';
 import { askSite, writeSite } from '@/lib/website/ai';
-import { appStoreIdOf, fetchHeadingFace, iconFromFile, iconFromUrl, importedHeadingFace, isGoogleFamily, lookupStoreFacts, pictureColors, webJpeg } from '@/lib/website/assets';
+import { appStoreIdOf, iconFromFile, iconFromUrl, importedHeadingFace, isGoogleFamily, lookupStoreFacts, pictureColors, webJpeg } from '@/lib/website/assets';
+import { loadWebsiteHeadingFace } from '@/lib/website/headingFace';
+import { acquireWebsitePublishLock, acquireWebsiteTranslationLock } from '@/lib/website/publishLock';
 import { applyChanges, boardsFingerprint, captionOf, factsFromProject, newDraft, newId, siteBoards, type Caption, type ChangeContext } from '@/lib/website/content';
 import {
   githubIdentities,
@@ -69,9 +71,9 @@ import {
 import { defaultPrivacy, privacyProblems } from '@/lib/website/privacy';
 import { faceCss, pageDir, pageUrl, renderSiteFiles } from '@/lib/website/render';
 import { changeSite, useSiteDraft, type SiteChatItem } from '@/lib/website/store';
-import { missingCounts, prunedTranslations, siteFingerprint, siteTexts, translator, type TranslationBook } from '@/lib/website/strings';
+import { missingCounts, prunedTranslations, siteFingerprint } from '@/lib/website/strings';
 import { boardColours, suggestColours, suggestHeading, type Weighted } from '@/lib/website/theme';
-import { projectTranslations, translateSite } from '@/lib/website/translate';
+import { mergeTranslationResult, projectTranslations, translateSite } from '@/lib/website/translate';
 import type { PublishRecord, SiteDraft, SitePage, SiteShot, SiteTheme } from '@/lib/website/types';
 import { zipFiles } from '@/lib/website/zip';
 import type { AscApp } from '@/lib/growth/asc';
@@ -164,11 +166,6 @@ function fontAllowed(family: string): boolean {
   return isGoogleFamily(family) || isCustomFontFamily(family);
 }
 
-function mergeBooks(into: TranslationBook, from: TranslationBook): TranslationBook {
-  const out: TranslationBook = { ...into };
-  for (const [locale, entries] of Object.entries(from)) out[locale] = { ...(into[locale] ?? {}), ...entries };
-  return out;
-}
 
 /**
  * A capture that has not come back in this long is not coming back: a font
@@ -432,6 +429,11 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
     const current = draftRef.current;
     if (!current || current.projectId !== projectIdRef.current || translateStop.current) return;
     const projectId = current.projectId;
+    let release: (() => void) | null;
+    try { release = await acquireWebsiteTranslationLock(projectId); }
+    catch { toast({ title: 'Could not start translation', description: 'Try again.' }); return; }
+    if (!release) { toast({ title: 'Translation is already running', description: 'Wait for it to finish before trying again.' }); return; }
+    if (draftRef.current !== current || projectIdRef.current !== projectId || translateStop.current) { release(); return; }
     const stop = new AbortController();
     translateStop.current = stop;
     setTranslating({ done: 0, total: 0, engine: '' });
@@ -442,7 +444,7 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
         onProgress: (done, total, engine) => setTranslating({ done, total, engine: engineLabel(engine) }),
       });
       await updateSiteOf(projectId, (now) => {
-        const merged = { ...now, translations: mergeBooks(now.translations, result.translations) };
+        const merged = { ...now, translations: mergeTranslationResult(now.translations, current.translations, result.translations) };
         return { ...merged, translations: prunedTranslations(merged) };
       });
       if (result.incomplete.length > 0 && !stop.signal.aborted) {
@@ -456,6 +458,7 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
     } finally {
       translateStop.current = null;
       setTranslating(null);
+      release();
     }
   }, [known, toast, updateSiteOf]);
 
@@ -603,7 +606,10 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
         languages: result.languages,
         privacy: result.privacy,
       });
-      site.create(created);
+      if (!site.create(created)) {
+        toast({ title: 'The website has changed', description: 'Open the website again before creating it.', variant: 'destructive' });
+        return;
+      }
       track('website_create', { ai: result.writeWithAi, languages: result.languages.length, shots: boards.length });
       setSection(result.writeWithAi ? 'ask' : 'home');
       if (result.writeWithAi) void runWrite(created, result.notes);
@@ -777,31 +783,7 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
 
   /** The heading face cut to the headings' letters in every language, or null to use the visitor's own. */
   const headingFace = useCallback(
-    async (current: SiteDraft, signal?: AbortSignal) => {
-      if (!current.theme.headingFont) return null;
-      if (!isGoogleFamily(current.theme.headingFont)) {
-        // A font the developer imported goes on the site only when they said its license allows it.
-        if (!current.theme.shareFont) return null;
-        return importedHeadingFace(current.theme.headingFont).catch((error) => {
-          console.warn('The imported heading font could not be read; the site uses the visitor’s own', error);
-          return null;
-        });
-      }
-      const texts = siteTexts(current);
-      const headings = [current.content.headline, current.content.galleryTitle, current.content.ctaTitle, ...current.content.features.map((feature) => feature.title), current.facts.appName];
-      const letters = current.languages
-        .flatMap((locale) => {
-          const t = translator(current, locale, known);
-          return [...headings.map((text) => t(text)), ...texts.template.map((text) => t(text, true))];
-        })
-        .join('');
-      try {
-        return await fetchHeadingFace(current.theme.headingFont, current.theme.headingWeight || 700, letters, signal);
-      } catch (error) {
-        console.warn('The heading face could not be fetched; the site uses the visitor’s own', error);
-        return null;
-      }
-    },
+    async (current: SiteDraft, signal?: AbortSignal) => loadWebsiteHeadingFace(current, known, signal),
     [known]
   );
 
@@ -826,6 +808,14 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
     if (!start || start.projectId !== projectIdRef.current || identity.state !== 'ready' || publishStop.current) return;
     // Everything below is this project's, whichever project is open by the time it ends.
     const projectId = start.projectId;
+    let release: (() => void) | null;
+    try { release = await acquireWebsitePublishLock(); }
+    catch { toast({ title: 'Could not start publishing', description: 'Try again.' }); return; }
+    if (!release) {
+      toast({ title: 'Publishing is already running', description: 'Wait for it to finish before trying again.' });
+      return;
+    }
+    if (draftRef.current !== start || projectIdRef.current !== projectId || publishStop.current) { release(); return; }
     const who = identity.who;
     const repo = repoName;
     const stop = new AbortController();
@@ -849,13 +839,19 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
       let current = latest && latest.projectId === projectId ? latest : start;
       if (Object.values(missingCounts(current, known)).some((count) => count > 0) && availableEngines().length > 0) {
         setPhase({ phase: 'translate' });
-        const result = await translateSite(current, { known, signal: stop.signal, onProgress: (done, total) => setPhase({ phase: 'translate', done, total }) });
+        const beforeTranslation = current.translations;
+        const releaseTranslation = await acquireWebsiteTranslationLock(projectId);
+        if (!releaseTranslation) throw new Error('Translation is already running. Wait for it to finish before publishing.');
+        let result: Awaited<ReturnType<typeof translateSite>>;
+        try { result = await translateSite(current, { known, signal: stop.signal, onProgress: (done, total) => setPhase({ phase: 'translate', done, total }) }); }
+        finally { releaseTranslation(); }
         current = { ...current, translations: result.translations };
         current = { ...current, translations: prunedTranslations(current) };
         const translated = current.translations;
         await updateSiteOf(projectId, (now) => {
-          const merged = { ...now, translations: mergeBooks(now.translations, translated) };
-          return { ...merged, translations: prunedTranslations(merged) };
+          const merged = { ...now, translations: mergeTranslationResult(now.translations, beforeTranslation, translated) };
+          current = { ...merged, translations: prunedTranslations(merged) };
+          return current;
         });
       }
       // Lines still in the site's own language go out only when the developer says so.
@@ -929,6 +925,7 @@ export function WebsiteWorkspace({ active, project, captureBoards, onBackToEdito
       goOn.current = null;
       publishStop.current = null;
       setJob(null);
+      release();
     }
   }, [identity, repoName, allShots, known, headingFace, updateSiteOf, toast, checkIdentity]);
 

@@ -43,7 +43,7 @@ import {
   storeOverview,
   storeReviews,
 } from '@/lib/growth/agentTools';
-import { getKeywordTracking, getStoreListingDrafts, setStoreReviewDone, trackStoreKeywords, untrackStoreKeyword, updateStoreListingDrafts } from '@/lib/growth/agentActions';
+import { applyStoreListingDrafts, getKeywordTracking, getStoreListingDrafts, prepareStoreReviewReply, sendPreparedStoreReviewReply, setStoreReviewDone, trackStoreKeywords, untrackStoreKeyword, updateStoreListingDrafts } from '@/lib/growth/agentActions';
 import type { AlignEdge, DistributeAxis } from '@/lib/elementGeometry';
 import {
   LIBRARY_KINDS,
@@ -506,9 +506,17 @@ export interface McpDesignApi {
   listProjectVersions(projectId: string): Promise<Array<{ id: string; createdAt: string; label: string; kind: string; projectName: string; boards: number }>>;
   listAiRuns(limit: number): Promise<Array<{ id: string; mode: string; status: string; startedAt: string; endedAt: string | null }>>;
   getWebsiteDraft(projectId: string): Promise<unknown>;
-  updateWebsiteDraft(args: { projectId: string; changes: unknown; dryRun?: unknown; confirmed?: unknown; expectedFingerprint?: unknown; expectedUpdatedAt?: unknown; expectedRevision?: unknown }): Promise<unknown>;
+  createWebsiteDraft(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedAt?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  publishWebsiteDraft(args: { projectId: string; owner: unknown; repo: unknown; allowUntranslated?: unknown; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  translateWebsiteDraft(args: { projectId: string; locales?: unknown; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  updateWebsiteDraft(args: { projectId: string; changes: unknown; sourceText?: unknown; dryRun?: unknown; confirmed?: unknown; expectedFingerprint?: unknown; expectedUpdatedAt?: unknown; expectedRevision?: unknown; expectedPlan?: unknown }): Promise<unknown>;
   getProjectSyncStatus(): Promise<unknown>;
-  pauseProjectAccountSync(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedSavedAt?: unknown; expectedEnabled?: unknown; expectedSessionGeneration?: unknown; expectedLinkFingerprint?: unknown }): Promise<unknown>;
+  requestProjectAccountSync(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  pauseProjectAccountSync(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedSavedAt?: unknown; expectedEnabled?: unknown; expectedSessionGeneration?: unknown; expectedLinkFingerprint?: unknown; expectedAction?: unknown }): Promise<unknown>;
+  resumeProjectAccountSync(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedSavedAt?: unknown; expectedEnabled?: unknown; expectedSessionGeneration?: unknown; expectedLinkFingerprint?: unknown; expectedAction?: unknown }): Promise<unknown>;
+  setCloudProjectSharing(args: { projectId: string; enabled?: unknown; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  startProjectCollaboration(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
+  stopProjectCollaboration(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
   /** Open a saved project in the editor. Null when the id is unknown. */
   openProject(projectId: string): Promise<McpProjectResult | null>;
   /**
@@ -2794,11 +2802,45 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'update_website_draft',
-    description: "Preview or update supported website text, colours and display options without publishing. Defaults to dryRun. Applying requires confirmed=true and the previewed fingerprint and update time. Only the app's own agents may write.",
+    name: 'create_website_draft',
+    description: "Preview or create a local website draft from the open project. Privacy questions remain unanswered. Applying requires confirmation and the unchanged preview. Does not publish. Only the app's own agents may write.",
     inputSchema: { type: 'object', properties: {
-      projectId: { type: 'string' }, changes: { type: 'object', description: 'Text fields, colors, screenshots or credit. See AGENT_GUIDE.md.' },
-      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedFingerprint: { type: 'string' }, expectedUpdatedAt: { type: 'number' }, expectedRevision: { type: 'string' },
+      projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedAt: { type: 'number' }, expectedPlan: { type: 'string' },
+    }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can create website drafts."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.createWebsiteDraft(args as Parameters<McpDesignApi['createWebsiteDraft']>[0]));
+    },
+  },
+  {
+    name: 'publish_website_draft',
+    description: "Preview or publish the open project's website to a GitHub Pages repository. Defaults to dryRun with no network requests. Ask the user before publishing. Applying requires confirmation and expectedPlan from the preview. After a timeout publishing may still be running; check GitHub before retrying. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: {
+      projectId: { type: 'string' }, owner: { type: 'string' }, repo: { type: 'string' }, allowUntranslated: { type: 'boolean' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
+    }, required: ['projectId', 'owner', 'repo'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can publish website drafts."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.publishWebsiteDraft(args as Parameters<McpDesignApi['publishWebsiteDraft']>[0]));
+    },
+  },
+  {
+    name: 'translate_website_draft',
+    description: "Preview or translate the open project's website using the configured translation engines. Translation may send site text to a provider and may incur charges. Ask the user before translating. Defaults to dryRun; applying requires confirmation and expectedPlan. A timed-out run may still be running. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, locales: { type: 'array', items: { type: 'string' } }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can translate website drafts."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.translateWebsiteDraft(args as Parameters<McpDesignApi['translateWebsiteDraft']>[0]));
+    },
+  },
+  {
+    name: 'update_website_draft',
+    description: "Preview or update website content, privacy answers and display options without publishing. Defaults to dryRun. Applying requires confirmation and all expected values from the preview. Privacy and addresses require the developer's statement. Only the app's own agents may write.",
+    inputSchema: { type: 'object', properties: {
+      projectId: { type: 'string' }, changes: { type: 'object', description: 'Website fields to change. See AGENT_GUIDE.md.' }, sourceText: { type: 'string', description: 'The developer\'s statement supporting privacy answers and addresses.' },
+      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedFingerprint: { type: 'string' }, expectedUpdatedAt: { type: 'number' }, expectedRevision: { type: 'string' }, expectedPlan: { type: 'string' },
     }, required: ['projectId', 'changes'] },
     run: async (args, api, ctx) => {
       if (!ctx.agent) return { ...textResult("Only the app's own agents can change website drafts."), isError: true };
@@ -2816,16 +2858,72 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'request_project_account_sync',
+    description: "Preview or request the open project's existing account sync. A confirmed request may send project data to the connected provider and runs asynchronously. Ask the user before sending. Check get_project_sync_status for the outcome. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: {
+      projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
+    }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can request account sync."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.requestProjectAccountSync(args as Parameters<McpDesignApi['requestProjectAccountSync']>[0]));
+    },
+  },
+  {
     name: 'pause_project_account_sync',
     description: "Preview or pause automatic updates of the open project's existing account copy. Defaults to dryRun; applying requires confirmation and expected values from the preview. An in-flight request may finish. Only the app's own agents may use it.",
     inputSchema: { type: 'object', properties: {
       projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' },
-      expectedSavedAt: { type: 'number' }, expectedEnabled: { type: 'boolean' }, expectedSessionGeneration: { type: 'number' }, expectedLinkFingerprint: { type: 'string' },
+      expectedSavedAt: { type: 'number' }, expectedEnabled: { type: 'boolean' }, expectedSessionGeneration: { type: 'number' }, expectedLinkFingerprint: { type: 'string' }, expectedAction: { type: 'string' },
     }, required: ['projectId'] },
     run: async (args, api, ctx) => {
       if (!ctx.agent) return { ...textResult("Only the app's own agents can pause account sync."), isError: true };
       if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
       return textResult(await api.pauseProjectAccountSync(args as Parameters<McpDesignApi['pauseProjectAccountSync']>[0]));
+    },
+  },
+  {
+    name: 'resume_project_account_sync',
+    description: "Preview or re-enable automatic updates to the open project's existing account copy. It may send project data later when automatic sync is enabled. Ask the user before enabling it. A missing remote revision requires a manual save. Applying requires confirmation and all expected values from the preview. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: {
+      projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedSavedAt: { type: 'number' }, expectedEnabled: { type: 'boolean' }, expectedSessionGeneration: { type: 'number' }, expectedLinkFingerprint: { type: 'string' }, expectedAction: { type: 'string' },
+    }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can resume account sync."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.resumeProjectAccountSync(args as Parameters<McpDesignApi['resumeProjectAccountSync']>[0]));
+    },
+  },
+  {
+    name: 'set_cloud_project_sharing',
+    description: "Preview or change link sharing for the open project's already saved cloud copy. Enabling exposes that copy to anyone with the link; disabling revokes existing links. Ask the user before changing sharing. Defaults to dryRun and requires confirmation and expectedPlan. Requires a server that supports conditional sharing. Does not return the link. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: {
+      projectId: { type: 'string' }, enabled: { type: 'boolean' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
+    }, required: ['projectId', 'enabled'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can change cloud sharing."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.setCloudProjectSharing(args as Parameters<McpDesignApi['setCloudProjectSharing']>[0]));
+    },
+  },
+  {
+    name: 'start_project_collaboration',
+    description: "Preview or join a live editing room for an already shared cloud copy, creating its first local room key if necessary. The user must authorize joining because peers can change the local project. Defaults to dryRun; applying requires confirmation and expectedPlan. Does not return an invite link. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can start live editing."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.startProjectCollaboration(args as Parameters<McpDesignApi['startProjectCollaboration']>[0]));
+    },
+  },
+  {
+    name: 'stop_project_collaboration',
+    description: "Preview or leave the open project's live editing room. This does not revoke its invite link. Defaults to dryRun; leaving requires confirmation and expectedPlan. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can leave live editing."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.stopProjectCollaboration(args as Parameters<McpDesignApi['stopProjectCollaboration']>[0]));
     },
   },
   {
@@ -3159,10 +3257,10 @@ const TOOLS: ToolDef[] = [
   }),
   {
     name: 'update_store_listing_drafts',
-    description: "Preview or save local store listing drafts. Defaults to dryRun; applying requires confirmed=true and expectedRevision from the preview. This does not send anything to a store. Only the app's own agents may write.",
+    description: "Preview or save local store listing drafts. Defaults to dryRun; applying requires confirmation and both expected values from the preview. This does not send anything to a store. Only the app's own agents may write.",
     inputSchema: { type: 'object', properties: {
       appId: { type: 'string' }, changes: { type: 'array', items: { type: 'object', properties: { locale: { type: 'string' }, field: { type: 'string' }, after: { type: 'string' } }, required: ['locale', 'field', 'after'] }, minItems: 1, maxItems: 20 },
-      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedRevision: { type: 'string' },
+      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedRevision: { type: 'string' }, expectedPlan: { type: 'string' },
     }, required: ['appId', 'changes'] },
     run: async (args, _api, ctx) => {
       if (!ctx.agent) return { ...textResult("Only the app's own agents can change listing drafts."), isError: true };
@@ -3170,12 +3268,23 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'apply_store_listing_drafts',
+    description: "Preview or send saved listing drafts to App Store Connect or Google Play. Defaults to dryRun, which does not contact the store. Ask the user before sending. Applying requires confirmed=true and expectedPlan from the preview. The store can accept only part of a request; after a timeout the operation may still be running, so check the store before retrying. Only the app's own agents may write.",
+    inputSchema: { type: 'object', properties: {
+      appId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
+    }, required: ['appId'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can apply listing drafts."), isError: true };
+      return textResult(await applyStoreListingDrafts(args));
+    },
+  },
+  {
     name: 'track_store_keywords',
-    description: "Preview or add keywords to a local Growth list. Defaults to dryRun. Applying requires confirmed=true. Future scheduled keyword checks may contact Apple. Only the app's own agents may write.",
+    description: "Preview or add keywords to a local Growth list. Defaults to dryRun. Applying requires confirmation and expectedPlan from the preview. Future scheduled keyword checks may contact Apple. Only the app's own agents may write.",
     inputSchema: { type: 'object', properties: {
       appId: { type: 'string' }, terms: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 50 },
       countries: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5 },
-      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' },
+      dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
     }, required: ['appId', 'terms'] },
     run: async (args, _api, ctx) => {
       if (!ctx.agent) return { ...textResult("Only the app's own agents can change tracked keywords."), isError: true };
@@ -3195,10 +3304,30 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'set_store_review_done',
-    description: "Preview or change a review's local no-reply-needed mark. Does not send a reply. Defaults to dryRun; applying requires confirmed=true and expectedRevision from the preview. Only the app's own agents may write.",
+    name: 'prepare_store_review_reply',
+    description: "Preview or save a local reply draft for review in Growth. Does not send a reply. Defaults to dryRun; applying requires confirmation and expectedPlan from the preview. Only the app's own agents may write.",
     inputSchema: { type: 'object', properties: {
-      appId: { type: 'string' }, reviewId: { type: 'string' }, done: { type: 'boolean' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedRevision: { type: 'string' },
+      appId: { type: 'string' }, reviewId: { type: 'string' }, text: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' },
+    }, required: ['appId', 'reviewId', 'text'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can prepare review replies."), isError: true };
+      return textResult(await prepareStoreReviewReply(args));
+    },
+  },
+  {
+    name: 'send_prepared_store_review_reply',
+    description: "Preview or send a prepared public review reply. Ask the user before sending. Defaults to dryRun; sending requires confirmed=true and expectedPlan. The store can change after its check and a timeout may mean the reply was sent. Only the app's own agents may use this.",
+    inputSchema: { type: 'object', properties: { appId: { type: 'string' }, reviewId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['appId', 'reviewId'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can send prepared replies."), isError: true };
+      return textResult(await sendPreparedStoreReviewReply(args));
+    },
+  },
+  {
+    name: 'set_store_review_done',
+    description: "Preview or change a review's local no-reply-needed mark. Does not send a reply. Defaults to dryRun; applying requires confirmation and both expected values from the preview. Only the app's own agents may write.",
+    inputSchema: { type: 'object', properties: {
+      appId: { type: 'string' }, reviewId: { type: 'string' }, done: { type: 'boolean' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedRevision: { type: 'string' }, expectedPlan: { type: 'string' },
     }, required: ['appId', 'reviewId', 'done'] },
     run: async (args, _api, ctx) => {
       if (!ctx.agent) return { ...textResult("Only the app's own agents can change review marks."), isError: true };
@@ -3571,6 +3700,12 @@ const SLOW_TOOLS = new Set([
   // Opens the user's app, waits up to 15s for its screen to settle, then takes
   // a full size screenshot from the Simulator or adb.
   'capture_screenshot',
+  'apply_store_listing_drafts',
+  'publish_website_draft',
+  'set_cloud_project_sharing',
+  'start_project_collaboration',
+  'translate_website_draft',
+  'send_prepared_store_review_reply',
 ]);
 
 function toolNameOf(message: JsonRpcMessage): string | undefined {

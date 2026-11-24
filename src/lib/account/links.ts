@@ -125,6 +125,27 @@ export async function putAccountLink(link: AccountProjectLink): Promise<void> {
   }
 }
 
+export async function recordAccountSyncResult(expected: AccountProjectLink, next: AccountProjectLink): Promise<'active' | 'paused' | 'changed'> {
+  return db.transaction('rw', db.accountLinks, async () => {
+    const current = await db.accountLinks.get(expected.projectId);
+    if (!current) return 'changed';
+    const { autoSync: _currentPermission, ...currentCopy } = current;
+    const { autoSync: _expectedPermission, ...expectedCopy } = expected;
+    if (JSON.stringify(currentCopy) !== JSON.stringify(expectedCopy)) return 'changed';
+    await db.accountLinks.put({ ...next, autoSync: current.autoSync });
+    return current.autoSync ? 'active' : 'paused';
+  });
+}
+
+export async function deleteAccountLinkIfUnchanged(expected: AccountProjectLink): Promise<boolean> {
+  return db.transaction('rw', db.accountLinks, async () => {
+    const current = await db.accountLinks.get(expected.projectId);
+    if (!current || JSON.stringify(current) !== JSON.stringify(expected)) return false;
+    await db.accountLinks.delete(expected.projectId);
+    return true;
+  });
+}
+
 /** Turn unattended pushes on or off for one project. */
 export async function setAccountLinkAutoSync(projectId: string, autoSync: boolean): Promise<void> {
   try {

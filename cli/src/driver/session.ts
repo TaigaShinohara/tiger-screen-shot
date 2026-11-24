@@ -39,6 +39,12 @@ const SLOW_TOOLS = new Set([
   'translate_locales',
   'add_locales',
   'capture_screenshot',
+  'apply_store_listing_drafts',
+  'publish_website_draft',
+  'set_cloud_project_sharing',
+  'start_project_collaboration',
+  'translate_website_draft',
+  'send_prepared_store_review_reply',
 ]);
 
 const HANDLER_TIMEOUT_MS = 30_000;

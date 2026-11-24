@@ -1,6 +1,24 @@
 import type { AccountSyncStatus } from './account/autoSync';
 import type { CloudAutoSaveStatus } from './cloud/autoSave';
 import type { CloudProviderId } from './account/types';
+import { db } from '@/database';
+import { getSession, getSessionGeneration } from './account/store';
+import { getDiscoverSession } from './discover/session';
+import { hasCloudAutoSaveConsent } from './cloud/links';
+
+export async function readProjectSyncLinks(projectId: string) {
+  const session = getSession();
+  const generation = getSessionGeneration();
+  const viewerId = getDiscoverSession()?.viewer?.id ?? null;
+  const [account, cloud] = await Promise.all([db.accountLinks.get(projectId), db.cloudLinks.get(projectId)]);
+  if (generation !== getSessionGeneration() || viewerId !== (getDiscoverSession()?.viewer?.id ?? null)) throw new Error('The connected account changed. Read sync status again.');
+  const accountLink = session && account?.accountId === session.account.id && account.provider === session.provider ? account : null;
+  const cloudLink = viewerId && cloud?.accountId === viewerId ? cloud : null;
+  return {
+    account: session ? { linked: !!accountLink, autoSync: accountLink?.autoSync ?? false } : null,
+    cloud: viewerId ? { linked: !!cloudLink, autoSaveConsent: hasCloudAutoSaveConsent(cloudLink, viewerId), shared: cloudLink?.visibility === 'link' } : null,
+  };
+}
 
 export function summarizeSyncStatus(input: {
   projectId: string;

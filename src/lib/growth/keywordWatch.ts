@@ -155,12 +155,13 @@ async function changeList(owner: string, change: (list: KeywordList) => KeywordL
 export async function trackKeywords(
   owner: string,
   terms: string[],
-  options: { source: KeywordSource; countries: string[] }
+  options: { source: KeywordSource; countries: string[]; expectedList?: string }
 ): Promise<{ added: string[]; refused: number }> {
   const outcome = { added: [] as string[], refused: 0 };
   await changeList(
     owner,
     (current) => {
+      if (options.expectedList !== undefined && JSON.stringify(current) !== options.expectedList) throw new Error('The tracked keywords changed. Preview again.');
       const plan = planTrackedKeywords(current, terms, options.source, Date.now());
       outcome.added.push(...plan.added);
       outcome.refused += plan.refused;

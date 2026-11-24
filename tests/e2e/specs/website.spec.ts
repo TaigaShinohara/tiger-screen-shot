@@ -185,6 +185,27 @@ async function editStoredSite(page: Page, patch: { languages?: string[]; transla
 }
 
 test.describe('website', () => {
+  test('the built-in agent creates a website for the open project', async ({ app, page, tauri, isDesktop }) => {
+    test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
+    await projectWithText(app);
+    const projects = await agentTool(tauri, 'list_projects', {}, true);
+    const project = JSON.parse(projects.text).find((entry: { open: boolean }) => entry.open);
+    const args = { projectId: project.id };
+    expect((await agentTool(tauri, 'create_website_draft', args, false)).isError).toBe(true);
+    const preview = await agentTool(tauri, 'create_website_draft', args, true);
+    expect(preview.isError, preview.text).toBe(false);
+    const plan = JSON.parse(preview.text);
+    expect(plan.privacyAnswered).toBe(false);
+    const before = await agentTool(tauri, 'get_website_draft', args, true);
+    expect(JSON.parse(before.text).exists).toBe(false);
+    const applied = await agentTool(tauri, 'create_website_draft', { ...args, expectedAt: plan.expectedAt, expectedPlan: plan.expectedPlan, dryRun: false, confirmed: true }, true);
+    expect(applied.isError, applied.text).toBe(false);
+    await page.reload();
+    await app.waitForBoot();
+    const after = await agentTool(tauri, 'get_website_draft', args, true);
+    expect(JSON.parse(after.text)).toMatchObject({ exists: true, draft: { privacy: { answered: false } } });
+  });
+
   test('the built-in agent previews and saves an edit to the visible website', async ({ app, page, tauri, isDesktop }) => {
     test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
     await projectWithText(app);
@@ -446,6 +467,40 @@ test.describe('website', () => {
       await expect(view.getByTestId('site-device-code')).toHaveText('ABCD-1234');
       await expect(view.getByText('github.com/octo', { exact: true })).toBeVisible({ timeout: 20_000 });
     }
+
+    test('the agent previews and publishes through the mocked GitHub API', async ({ app, page, tauri, isDesktop }) => {
+      test.skip(!isDesktop, 'GitHub publishing uses the desktop HTTP bridge');
+      test.setTimeout(120_000);
+      await projectWithText(app);
+      let view = await openWebsite(page);
+      await makeSite(page, view);
+      await page.evaluate(() => localStorage.setItem('open-screenshot-generator.website.github', JSON.stringify({ token: 'fixture-only-token', login: 'octo', name: 'Fixture' })));
+      await page.reload();
+      await app.waitForBoot();
+      view = await openWebsite(page);
+      await openSection(view, /^Publish/);
+      await expect(view.getByText('github.com/octo', { exact: true })).toBeVisible({ timeout: 20_000 });
+      await expect(view.getByTestId('website-preview').getByRole('status')).toHaveCount(0, { timeout: 30_000 });
+      const projects = await agentTool(tauri, 'list_projects', {}, true);
+      const project = JSON.parse(projects.text).find((entry: { open: boolean }) => entry.open);
+      const args = { projectId: project.id, owner: 'octo', repo: 'pebble', allowUntranslated: true };
+      expect((await agentTool(tauri, 'publish_website_draft', args, false)).isError).toBe(true);
+      const before = (await requests(page)).length;
+      const preview = await agentTool(tauri, 'publish_website_draft', args, true);
+      expect(preview.isError, preview.text).toBe(false);
+      const plan = JSON.parse(preview.text);
+      expect(plan).toMatchObject({ dryRun: true, siteUrl: 'https://octo.github.io/pebble/', remoteChecked: false, problems: [] });
+      expect((await requests(page)).length).toBe(before);
+      const wrong = await agentTool(tauri, 'publish_website_draft', { ...args, dryRun: false, confirmed: true, expectedPlan: 'wrong' }, true);
+      expect(wrong.isError).toBe(true);
+      const result = await agentTool(tauri, 'publish_website_draft', { ...args, dryRun: false, confirmed: true, expectedPlan: plan.expectedPlan }, true);
+      expect(result.isError, result.text).toBe(false);
+      expect(JSON.parse(result.text)).toMatchObject({ sent: true, live: false, repo: 'pebble' });
+      const tree = JSON.parse((await requests(page)).find((request) => request.method === 'POST' && request.url.endsWith('/git/trees'))!.body!) as { tree: Array<{ path: string }> };
+      expect(tree.tree.some((item) => item.path.startsWith('assets/shots/'))).toBe(true);
+      const saved = await agentTool(tauri, 'get_website_draft', { projectId: project.id }, true);
+      expect(JSON.parse(saved.text).draft.publish).toMatchObject({ owner: 'octo', repo: 'pebble', live: false });
+    });
 
     test('untranslated lines wait for a yes, and the Pages step GitHub leaves to the developer stays until the site answers', async ({ app, page, isDesktop }) => {
       test.skip(!isDesktop, "GitHub's device sign-in and the app's HTTP client are the desktop app's");

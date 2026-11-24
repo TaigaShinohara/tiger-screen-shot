@@ -7,6 +7,14 @@
 let jsonMode = false;
 let verbose = false;
 let quiet = false;
+let captured: unknown[] | null = null;
+
+export function captureOutput(): void { captured = []; }
+export function takeCapturedOutput(): unknown[] {
+  const result = captured ?? [];
+  captured = null;
+  return result;
+}
 
 export function configureOutput(options: { json?: boolean; verbose?: boolean; quiet?: boolean }): void {
   jsonMode = !!options.json;
@@ -53,6 +61,7 @@ export function debug(message: string): void {
 
 /** The one channel that writes stdout. Everything machine-readable goes here. */
 export function emit(value: unknown): void {
+  if (captured) { captured.push(value); return; }
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 

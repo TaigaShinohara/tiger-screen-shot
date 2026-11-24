@@ -420,7 +420,7 @@ test.describe('growth keywords', () => {
       expect(preview.isError, preview.text).toBe(false);
       const plan = JSON.parse(preview.text);
       expect(plan).toMatchObject({ dryRun: true, proposed: [{ locale: 'en-US', field: 'subtitle', after: 'A fresh subtitle' }] });
-      const applied = await mcpCall(tauri, 'update_store_listing_drafts', { ...args, dryRun: false, confirmed: true, expectedRevision: plan.expectedRevision }, true);
+      const applied = await mcpCall(tauri, 'update_store_listing_drafts', { ...args, dryRun: false, confirmed: true, expectedRevision: plan.expectedRevision, expectedPlan: plan.expectedPlan }, true);
       expect(applied.isError, applied.text).toBe(false);
       expect(JSON.parse(applied.text).sentToStore).toBe(false);
       await page.reload();
@@ -428,6 +428,11 @@ test.describe('growth keywords', () => {
       const after = await mcpCall(tauri, 'get_store_listing_drafts', { appId: String(YOUR_ID) }, true);
       expect(after.isError, after.text).toBe(false);
       expect(JSON.parse(after.text).changes).toMatchObject([{ locale: 'en-US', field: 'subtitle', after: 'A fresh subtitle' }]);
+      const applyPreview = await mcpCall(tauri, 'apply_store_listing_drafts', { appId: String(YOUR_ID) }, true);
+      expect(applyPreview.isError, applyPreview.text).toBe(false);
+      expect(JSON.parse(applyPreview.text)).toMatchObject({ dryRun: true, sendsToStore: true, remoteChecked: false });
+      const wrong = await mcpCall(tauri, 'apply_store_listing_drafts', { appId: String(YOUR_ID), dryRun: false, confirmed: true, expectedPlan: 'wrong' }, true);
+      expect(wrong.isError).toBe(true);
     });
 
     test('the built-in agent previews and changes tracked keywords', async ({ app, page, isDesktop, tauri }) => {
@@ -443,7 +448,7 @@ test.describe('growth keywords', () => {
       const preview = await mcpCall(tauri, 'track_store_keywords', input, true);
       expect(preview.isError, preview.text).toBe(false);
       expect(JSON.parse(preview.text)).toMatchObject({ dryRun: true, added: ['fixture keyword'] });
-      const write = await mcpCall(tauri, 'track_store_keywords', { ...input, dryRun: false, confirmed: true }, true);
+      const write = await mcpCall(tauri, 'track_store_keywords', { ...input, dryRun: false, confirmed: true, expectedPlan: JSON.parse(preview.text).expectedPlan }, true);
       expect(write.isError, write.text).toBe(false);
       const list = await mcpCall(tauri, 'get_keyword_tracking', { appId: String(YOUR_ID) }, true);
       expect(JSON.parse(list.text).keywords.some((item: { term: string }) => item.term === 'fixture keyword')).toBe(true);

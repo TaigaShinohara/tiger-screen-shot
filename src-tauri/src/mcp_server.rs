@@ -82,6 +82,12 @@ const SLOW_TOOLS: &[&str] = &[
     // Opens the user's app on a simulator or emulator, waits up to 15s for the
     // screen to settle, then takes a full size screenshot (device_capture.rs).
     "capture_screenshot",
+    "apply_store_listing_drafts",
+    "publish_website_draft",
+    "set_cloud_project_sharing",
+    "start_project_collaboration",
+    "translate_website_draft",
+    "send_prepared_store_review_reply",
 ];
 
 /// Max request body we will buffer (generous for base64 image arguments).
@@ -813,6 +819,12 @@ mod tests {
         let call = |name: &str| json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": {} } });
         assert_eq!(timeout_for(&call("import_project_image")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("export_png")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("apply_store_listing_drafts")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("publish_website_draft")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("set_cloud_project_sharing")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("start_project_collaboration")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("translate_website_draft")), SLOW_RESPONSE_TIMEOUT);
+        assert_eq!(timeout_for(&call("send_prepared_store_review_reply")), SLOW_RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&call("list_artboards")), RESPONSE_TIMEOUT);
         assert_eq!(timeout_for(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })), RESPONSE_TIMEOUT);
     }

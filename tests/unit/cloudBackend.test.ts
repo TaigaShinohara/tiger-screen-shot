@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 
 const source = readFileSync(resolve('infra/vps/pb-hooks/060_projects.pb.js'), 'utf8');
 const assetSource = readFileSync(resolve('infra/vps/pb-hooks/lib/cloudAssets.js'), 'utf8');
+const sharingSource = readFileSync(resolve('infra/vps/pb-hooks/lib/cloudSharing.js'), 'utf8');
 
 function backend() {
   const routes = new Map<string, (event: unknown) => { status: number; body: unknown }>();
@@ -15,7 +16,7 @@ function backend() {
   let exists = true;
   const assets: Array<{ getString: (key: string) => string; getInt: (key: string) => number }> = [];
   const fields: Record<string, unknown> = {
-    owner: 'owner', project_id: 'local', updated: 'stamp', asset_bytes: 0,
+    owner: 'owner', project_id: 'local', updated: 'stamp', asset_bytes: 0, visibility: 'private', share_slug: '',
   };
   const row = {
     id: 'record',
@@ -47,6 +48,8 @@ function backend() {
     authUser: () => ({ user: { id: 'owner' } }),
     clampText: (value: unknown, max: number) => String(value ?? '').slice(0, max),
     formValue: (event: { form: Record<string, string> }, key: string) => event.form[key] ?? '',
+    readBody: (event: { body: Record<string, unknown> }) => event.body,
+    newShareSlug: () => 'new-secret-slug',
     ownedProject: (database: unknown, id: string, owner: string) => {
       assert.equal(database, tx);
       return exists && id === row.id && fields.owner === owner ? row : null;
@@ -67,9 +70,11 @@ function backend() {
   }
   const assetModule = { exports: {} };
   runInNewContext(assetSource, { module: assetModule, Record: record, console });
+  const sharingModule = { exports: {} };
+  runInNewContext(sharingSource, { module: sharingModule });
   runInNewContext(source, {
     routerAdd: (method: string, path: string, handler: (event: unknown) => { status: number; body: unknown }) => routes.set(`${method} ${path}`, handler),
-    require: (path: string) => path.endsWith('/cloudAssets.js') ? assetModule.exports : helpers,
+    require: (path: string) => path.endsWith('/cloudAssets.js') ? assetModule.exports : path.endsWith('/cloudSharing.js') ? sharingModule.exports : helpers,
     __hooks: '/hooks', $app: app, $apis: { bodyLimit: () => {} }, console, Record: record,
   });
   function request(method = 'PUT', changes: Record<string, string> = {}) {
@@ -90,11 +95,47 @@ function backend() {
       json: (status: number, body: unknown) => ({ status, body }),
     });
   }
+  function share(changes: Record<string, unknown> = {}) {
+    return routes.get('PUT /api/openscreengen/projects/{id}/share-conditional')!({
+      body: { projectId: 'local', expectedUpdated: 'stamp', on: true, ...changes },
+      request: { pathValue: () => 'record' }, json: (status: number, body: unknown) => ({ status, body }),
+    });
+  }
   return {
-    fields, request, upload, remove: () => { exists = false; },
+    fields, request, upload, share, remove: () => { exists = false; },
     writes: () => writes, creates: () => creates, assetWrites: () => assetWrites,
   };
 }
+
+test('conditional sharing rejects stale revisions and never rotates an already shared link', () => {
+  for (const invalid of [{ projectId: '' }, { expectedUpdated: '' }, { on: 'true' }]) {
+    const server = backend();
+    assert.equal(server.share(invalid).status, 400);
+    assert.equal(server.writes(), 0);
+  }
+  const wrongProject = backend();
+  assert.equal(wrongProject.share({ projectId: 'other' }).status, 404);
+  assert.equal(wrongProject.writes(), 0);
+  const wrongOwner = backend();
+  wrongOwner.fields.owner = 'other';
+  assert.equal(wrongOwner.share().status, 404);
+  assert.equal(wrongOwner.writes(), 0);
+  const stale = backend();
+  stale.fields.updated = 'other';
+  assert.equal(stale.share().status, 409);
+  assert.equal(stale.writes(), 0);
+  const server = backend();
+  assert.equal(server.share().status, 200);
+  assert.equal(server.fields.visibility, 'link');
+  assert.equal(server.writes(), 1);
+  assert.equal(server.share({ expectedUpdated: 'saved-1' }).status, 200);
+  assert.equal(server.writes(), 1);
+  assert.equal(server.fields.share_slug, 'new-secret-slug');
+  assert.equal(server.share({ expectedUpdated: 'stamp', on: false }).status, 409);
+  assert.equal(server.fields.visibility, 'link');
+  assert.equal(server.share({ expectedUpdated: 'saved-1', on: false }).status, 200);
+  assert.equal(server.fields.visibility, 'private');
+});
 
 test('conditional cloud updates match the record, account, project and saved revision before writing', () => {
   const scenarios = [

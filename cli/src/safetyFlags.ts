@@ -13,7 +13,7 @@ export function validateSafetyFlags(args: ParsedArgs): void {
   if (flags.yes !== undefined && command === 'cache' && positionals[0]?.toLowerCase() !== 'prune') {
     throw usageError('--yes is only supported by osg cache prune.');
   }
-  if (flags.timeout !== undefined && !['import', 'render', 'video'].includes(command)) {
+  if (flags.timeout !== undefined && !['import', 'render', 'video', 'desktop-call'].includes(command)) {
     throw usageError(`--timeout is not supported by osg ${command}.`);
   }
   if (flags['dry-run'] === undefined) return;

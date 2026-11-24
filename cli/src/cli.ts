@@ -12,13 +12,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { parseArgs, flagBool, flagString } from './args.js';
 import { loadConfig } from './config.js';
 import { buildContext, type CommandContext } from './context.js';
 import { EXIT, OsgError } from './errors.js';
-import { configureOutput, info, fail, dim, bold, cyan, emit, isJsonMode } from './log.js';
+import { captureOutput, configureOutput, info, fail, dim, bold, cyan, emit, isJsonMode, takeCapturedOutput } from './log.js';
 import { validateSafetyFlags } from './safetyFlags.js';
 import { recordCommand } from './history.js';
+import { agentResult } from './agentContract.js';
 
 interface CommandSpec {
   name: string;
@@ -87,6 +89,12 @@ const COMMANDS: CommandSpec[] = [
     summary: 'One design tool call, raw JSON on stdout',
     usage: "osg call <tool> '<json>' [--yes]   |   osg call --list",
     load: () => import('./commands/call.js'),
+  },
+  {
+    name: 'desktop-call',
+    summary: 'Call a tool on the running desktop app',
+    usage: "osg desktop-call <tool> --port <port> [--args '<json>'] [--agent-json]",
+    load: () => import('./commands/desktopCall.js'),
   },
   {
     name: 'render',
@@ -172,6 +180,11 @@ const GLOBAL_FLAGS = `
 --offline              Never reach the network. Fails on an uncached asset
 --assets-base-url <u>  Where artwork is hydrated from
 --json                 Machine readable output on stdout
+--agent-json           Versioned result and standard exit codes (not for streaming commands)
+--dry-run              Preview supported operations; unsupported operations reject it
+--yes                  Confirm supported destructive operations
+--idempotency-key <k>  Not supported; rejected
+--timeout <sec>        Timeout for import, render, video and desktop-call
 --verbose              Explain what is happening, including page errors
 --quiet                Only errors
 `.trim();
@@ -217,6 +230,12 @@ function printHelp(commandName?: string): void {
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
+
+  if (agentMode) {
+    delete args.flags['agent-json'];
+    args.flags.json = true;
+    if (args.command === 'mcp' || args.command === 'studio') throw new OsgError('--agent-json does not support streaming commands.');
+  }
 
   configureOutput({
     json: flagBool(args.flags, 'json', false),
@@ -266,17 +285,35 @@ async function main(): Promise<number> {
   }
 }
 
-function recordResult(code: number): void {
-  try { recordCommand(process.argv.slice(2), code); }
+function recordResult(code: number, outcome?: string): void {
+  try { recordCommand(process.argv.slice(2), code, agentMode ? requestId : undefined, outcome); }
   catch { process.stderr.write('Warning: CLI history could not be recorded.\n'); }
 }
 
+const agentMode = flagBool(parseArgs(process.argv.slice(2)).flags, 'agent-json', false);
+const requestId = randomUUID();
+if (agentMode) captureOutput();
+
 main()
   .then((code) => {
-    recordResult(code);
-    process.exitCode = code;
+    const result = agentMode ? agentResult(requestId, code, takeCapturedOutput()) : null;
+    if (result) emit(result.body);
+    recordResult(result?.exitCode ?? code, result ? ('error' in result.body ? result.body.error?.code : 'success') : undefined);
+    process.exitCode = result?.exitCode ?? code;
   })
   .catch((error: unknown) => {
+    if (agentMode) {
+      const code = error instanceof OsgError ? error.code : EXIT.driver;
+      const systemCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const result = agentResult(requestId, code, takeCapturedOutput(), {
+        code: error instanceof OsgError && error.detail?.agentCode === 'permission_denied' ? 'permission_denied' : systemCode === 'EACCES' || systemCode === 'EPERM' ? 'permission_denied' : systemCode === 'ENOENT' ? 'not_found' : code === EXIT.usage ? 'invalid_argument' : code === EXIT.verify ? 'verification_failed' : 'execution_failed',
+        message: error instanceof Error ? error.message : String(error), retryable: false,
+      });
+      emit(result.body);
+      recordResult(result.exitCode, 'error' in result.body ? result.body.error?.code : 'success');
+      process.exitCode = result.exitCode;
+      return;
+    }
     if (error instanceof OsgError) {
       fail(error.message);
       if (error.fix) info(`      ${dim(error.fix)}`);

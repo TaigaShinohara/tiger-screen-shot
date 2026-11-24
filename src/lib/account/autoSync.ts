@@ -351,6 +351,13 @@ export class AccountAutoSyncer {
     this.reschedule();
   }
 
+  noteLinkEnabled(projectId: string): void {
+    if (projectId !== this.config.projectId) return;
+    this.hasLink = true;
+    this.linkChecked = true;
+    this.noteChange(projectId);
+  }
+
   /** The chip's retry: clears a stop or a backoff and pushes right now. */
   syncNow(): void {
     this.stopped = false;
@@ -358,6 +365,13 @@ export class AccountAutoSyncer {
     this.failures = 0;
     this.retryAt = 0;
     void this.push('manual');
+  }
+
+  requestSyncNow(): boolean {
+    const { projectId, connected, enabled, collabActive } = this.config;
+    if (this.muted || !projectId || !connected || !enabled || collabActive || this.inFlight || this.stopped || !this.linkChecked || !this.hasLink || (typeof navigator !== 'undefined' && navigator.onLine === false)) return false;
+    this.syncNow();
+    return true;
   }
 
   // --- lifecycle ------------------------------------------------------------

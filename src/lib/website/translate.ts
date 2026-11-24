@@ -20,6 +20,18 @@ import type { SiteDraft } from './types';
 
 export type { TranslationBook } from './strings';
 
+export function mergeTranslationResult(current: TranslationBook, before: TranslationBook, after: TranslationBook): TranslationBook {
+  const merged: TranslationBook = { ...current };
+  for (const [locale, entries] of Object.entries(after)) {
+    for (const [key, value] of Object.entries(entries)) {
+      const previous = before[locale]?.[key];
+      if (previous === value || current[locale]?.[key] !== previous) continue;
+      merged[locale] = { ...(merged[locale] ?? {}), [key]: value };
+    }
+  }
+  return merged;
+}
+
 /**
  * The captions of the project's screenshots in each of its languages, keyed
  * by the fingerprint of the base language's caption, for every language of

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseArgs, flagBool } from './args.js';
 
-const RECORDED = new Set(['init', 'import', 'new', 'fill', 'design', 'edit', 'call', 'render', 'video', 'localize', 'manifest', 'upload', 'cache', 'editor', 'install', 'all']);
+const RECORDED = new Set(['init', 'import', 'new', 'fill', 'design', 'edit', 'call', 'desktop-call', 'render', 'video', 'localize', 'manifest', 'upload', 'cache', 'editor', 'install', 'all']);
 const MAX_BYTES = 1024 * 1024;
 
 export interface HistoryEntry {
@@ -26,15 +26,15 @@ export function historyFile(): string {
   return path.join(base, 'open-screenshot-generator', 'history.jsonl');
 }
 
-export function recordCommand(argv: string[], exitCode: number): void {
+export function recordCommand(argv: string[], exitCode: number, requestId?: string, outcome?: string): void {
   const args = parseArgs(argv);
   if (!RECORDED.has(args.command) || flagBool(args.flags, 'help') || flagBool(args.flags, 'h')) return;
   const file = historyFile();
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const entry: HistoryEntry = {
-    schema_version: 1, request_id: randomUUID(), finished_at: new Date().toISOString(),
+    schema_version: 1, request_id: requestId ?? randomUUID(), finished_at: new Date().toISOString(),
     command: args.command, dry_run: flagBool(args.flags, 'dry-run'), exit_code: exitCode,
-    outcome: exitCode === 0 ? 'success' : exitCode === 1 ? 'usage_or_environment_error' : exitCode === 3 ? 'verification_failed' : 'execution_failed',
+    outcome: outcome ?? (exitCode === 0 ? 'success' : exitCode === 1 ? 'usage_or_environment_error' : exitCode === 3 ? 'verification_failed' : 'execution_failed'),
   };
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0);
   const fd = fs.openSync(file, flags, 0o600);
