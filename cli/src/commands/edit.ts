@@ -33,7 +33,7 @@ import {
 } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
 import { projectDataOf } from '../projectDocument.js';
-import { requireToolConfirmation } from '../safetyFlags.js';
+import { confirmedToolArgs, requireToolConfirmation } from '../safetyFlags.js';
 
 interface ToolCall {
   tool: string;
@@ -72,7 +72,7 @@ export async function run(ctx: CommandContext): Promise<number> {
     const label = `${index + 1}/${calls.length} ${call.tool}`;
     const at = Date.now();
     try {
-      const result = await session.call(call.tool, call.args);
+      const result = await session.call(call.tool, confirmedToolArgs(call.tool, call.args, flagBool(flags, 'yes')));
       const ms = Date.now() - at;
       outcomes.push({ index: index + 1, tool: call.tool, ok: true, ms, result });
       ok(`${label} ${dim(humanMs(ms))}`);

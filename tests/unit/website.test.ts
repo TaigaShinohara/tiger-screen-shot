@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { WebsitePublish } from '@/components/open-screenshot-generator/website/WebsitePublish';
 import { PrivacyQuestions } from '@/components/open-screenshot-generator/website/WebsiteShared';
 import { changeSite, setSiteStorage, SiteCopy, type SiteStorage, type StoredSite } from '@/lib/website/store';
+import { getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
 import { applyChanges, boardsFingerprint, captionOf, defaultContent, isLabel, newDraft, cleanText } from '@/lib/website/content';
 import { buildPolicy, cleanPrivacy, defaultPrivacy, policyStrings, serviceNames } from '@/lib/website/privacy';
 import { keepsAddresses, missingFor, prunedTranslations, sameLanguage, siteFingerprint, siteTexts, translator } from '@/lib/website/strings';
@@ -832,6 +833,86 @@ test('a result that lands while the site is on screen is written by a save strai
     await copy.release();
     setSiteStorage(null);
   }
+});
+
+test('agent reads the current site without leaking icon bytes or chat', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  const copy = new SiteCopy('p1', 60_000);
+  try {
+    const original = draft({ facts: facts({ icon: 'data:image/png;base64,private-icon' }) });
+    rows.set('p1', { projectId: 'p1', draft: original, chat: [{ id: 'c1', at: 1, role: 'user', text: 'private chat' }], updatedAt: 0 });
+    copy.hold();
+    await assert.rejects(getWebsiteDraft('p1'), /still loading/);
+    await until(() => copy.snapshot().loaded);
+    copy.update((site) => ({ ...site, content: { ...site.content, headline: 'Current edit' } }));
+    const result = await getWebsiteDraft('p1');
+    assert.equal(result.exists, true);
+    if (!result.exists) throw new Error('Expected a site');
+    assert.equal(result.draft.content.headline, 'Current edit');
+    assert.equal(result.draft.facts.hasIcon, true);
+    assert.equal(JSON.stringify(result).includes('private'), false);
+    assert.notEqual(rows.get('p1')?.draft.content.headline, 'Current edit');
+  } finally {
+    await copy.release();
+    setSiteStorage(null);
+  }
+});
+
+test('agent does not report a failed website read as a missing draft', async () => {
+  setSiteStorage({ transaction: async () => { throw new Error('Storage failed'); } });
+  const copy = new SiteCopy('p1');
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    copy.hold();
+    await until(() => copy.snapshot().loaded);
+    await assert.rejects(getWebsiteDraft('p1'), /could not be read/);
+  } finally {
+    await copy.release();
+    console.error = originalError;
+    setSiteStorage(null);
+  }
+});
+
+test('agent previews, refuses stale edits and saves into the visible website', async () => {
+  const { rows, storage } = memorySites();
+  setSiteStorage(storage);
+  const copy = new SiteCopy('p1', 60_000);
+  try {
+    rows.set('p1', { projectId: 'p1', draft: draft(), chat: [], updatedAt: 0 });
+    copy.hold();
+    await until(() => copy.snapshot().loaded);
+    const before = structuredClone(rows.get('p1'));
+    const preview = await updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'New headline' } }) as { expectedFingerprint: string; expectedUpdatedAt: number; dryRun: boolean };
+    assert.equal(preview.dryRun, true);
+    assert.deepEqual(rows.get('p1'), before);
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'New headline' }, ...preview, dryRun: false }), /Confirm/);
+    copy.update((site) => ({ ...site, content: { ...site.content, subhead: 'Another edit' } }));
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'New headline' }, ...preview, dryRun: false, confirmed: true }), /changed after the preview/);
+    const next = await updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'New headline' } }) as { expectedFingerprint: string; expectedUpdatedAt: number };
+    await updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'New headline' }, ...next, dryRun: false, confirmed: true });
+    assert.equal(copy.snapshot().draft?.content.headline, 'New headline');
+    assert.equal(rows.get('p1')?.draft.content.headline, 'New headline');
+    assert.equal(rows.get('p1')?.draft.content.subhead, 'Another edit');
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { privacy: {} } }), /cannot be changed/);
+  } finally { await copy.release(); setSiteStorage(null); }
+});
+
+test('agent reports a website save failure without claiming persistence', async () => {
+  const row = { projectId: 'p1', draft: draft(), chat: [], updatedAt: 0 };
+  setSiteStorage({ transaction: async (work) => work({ get: async () => structuredClone(row), put: async () => { throw new Error('disk full'); } }) });
+  const copy = new SiteCopy('p1', 60_000);
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    copy.hold();
+    await until(() => copy.snapshot().loaded);
+    const preview = await updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'Changed' } }) as { expectedFingerprint: string; expectedUpdatedAt: number };
+    await assert.rejects(updateWebsiteDraft({ projectId: 'p1', changes: { headline: 'Changed' }, ...preview, dryRun: false, confirmed: true }), /could not be saved/);
+    assert.equal(copy.snapshot().draft?.content.headline, 'Changed');
+    assert.notEqual(row.draft.content.headline, 'Changed');
+  } finally { await copy.release(); console.error = originalError; setSiteStorage(null); }
 });
 
 test('results that land while the site is still being read go in once it is, and letting go writes them', async () => {

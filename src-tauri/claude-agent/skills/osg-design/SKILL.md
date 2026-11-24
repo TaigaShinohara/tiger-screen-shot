@@ -107,7 +107,7 @@ can read. list_assets lists every uploaded image if you need a ref again. Copy r
   template_somnia_sleep); never build one from a template's name.
 - get_template gives, per board, deviceSlots (elementId, deviceType) and textSlots (elementId,
   content).
-- apply_template with templateId, texts (elementId, content), screenshots (elementId, and src set
+- apply_template with confirmed: true, templateId, texts (elementId, content), screenshots (elementId, and src set
   to an asset ref), and projectName when the project still has a placeholder name. It replaces
   every board of the open project with a filled copy in one undo step, keeps the project and its
   languages, and returns the new boards.

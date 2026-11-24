@@ -220,6 +220,10 @@ import { GrowthWorkspace, type GrowthRequest } from './growth/GrowthWorkspace';
 import { CaptureWorkspace, type CaptureRequest, type ClipOutcome } from './capture/CaptureWorkspace';
 import { WebsiteWorkspace, type CaptureRequest as WebsiteCaptureRequest, type CapturedBoard } from './website/WebsiteWorkspace';
 import { flushWebsiteSaves } from '@/lib/website/store';
+import { getWebsiteDraft, updateWebsiteDraft } from '@/lib/website/agent';
+import { summarizeSyncStatus } from '@/lib/agentSyncStatus';
+import { pauseProjectAccountSync } from '@/lib/account/agentSync';
+import { getSessionGeneration } from '@/lib/account/store';
 import { captureTargets } from '@/lib/capture/frames';
 import { placeClip, placeShots, type ClipPlacement, type ShotPlacement } from '@/lib/capture/place';
 import { deviceForQuickCapture, shootDevice } from '@/lib/capture/shoot';
@@ -11748,6 +11752,34 @@ const generateRandomProjectName = (): string => {
     listAiRuns: async (limit) => {
       const runs = await listOperationsStrict(limit);
       return runs.map(summarizeOperation);
+    },
+    getWebsiteDraft: async (projectId) => {
+      if (!await db.projects.get(projectId)) throw new Error('Project not found. Call list_projects for valid IDs.');
+      return getWebsiteDraft(projectId);
+    },
+    updateWebsiteDraft: async (args) => {
+      if (!await db.projects.get(args.projectId)) throw new Error('Project not found. Call list_projects for valid IDs.');
+      return updateWebsiteDraft(args);
+    },
+    getProjectSyncStatus: async () => {
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId) throw new Error('Open a project first.');
+      return summarizeSyncStatus({
+        projectId: activeProjectId,
+        accountConnected: isAccountConnected,
+        accountProvider: accountSession?.provider ?? null,
+        accountEnabled: accountSync.enabled,
+        accountStatus: accountSync.status,
+        cloudAvailable: isCloudAvailable,
+        cloudSignedIn: isCloudSignedIn,
+        cloudEnabled: cloudAutoSave.enabled,
+        cloudStatus: cloudAutoSave.status,
+      });
+    },
+    pauseProjectAccountSync: async (args) => {
+      if (!activeProjectId || activeProjectIdRef.current !== activeProjectId || args.projectId !== activeProjectId) throw new Error('Open that project first.');
+      const result = await pauseProjectAccountSync(args);
+      if (!result.dryRun && activeProjectIdRef.current === args.projectId && getSessionGeneration() === result.sessionGeneration) accountSync.noteUnlinked();
+      return result;
     },
     openProject: async (projectId) => {
       // Parked in a tab: bring that tab back as it was, undo history and all,

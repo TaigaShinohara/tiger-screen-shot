@@ -5,8 +5,8 @@
 // looked at the Reviews. They live here instead, one list per app, and in the
 // growth database too (`listing:drafts:<appId>`), so they also outlast a
 // restart of the app until they are applied or discarded.
-// "Remove this app's data" clears that row with the rest of the app's keys,
-// and discardListingDrafts clears the copy in memory.
+// "Remove this app's data" waits for pending writes, then clears the row
+// with the rest of the app's keys and the copy in memory.
 //
 // The AI proofreading results ride along for the session only: they are
 // worth keeping across a section change (each run is a call to the AI), but
@@ -15,7 +15,7 @@
 // mounted while one runs shows it rather than offering to start it again.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { readMeta, writeMeta } from './db';
+import { clearApp, readMeta, writeMeta } from './db';
 import type { ListingChange, ListingIssue, ListingSnapshot } from './types';
 
 export const listingDraftsKey = (appId: string) => `listing:drafts:${appId}`;
@@ -44,6 +44,8 @@ export interface ListingDrafts {
 const EMPTY: ListingDrafts = { changes: [], aiIssues: [], job: null, note: null };
 const drafts = new Map<string, ListingDrafts>();
 const loaded = new Set<string>();
+const loading = new Map<string, Promise<void>>();
+const writes = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -62,13 +64,21 @@ export function getListingDrafts(appId: string): ListingDrafts {
 type Update<T> = T | ((current: T) => T);
 
 export function setListingChanges(appId: string, update: Update<ListingChange[]>): void {
+  void setListingChangesStrict(appId, update).catch((error) => console.error('Keeping the listing edits failed', error));
+}
+
+export async function setListingChangesStrict(appId: string, update: Update<ListingChange[]>): Promise<void> {
   const current = getListingDrafts(appId);
   const changes = typeof update === 'function' ? update(current.changes) : update;
   drafts.set(appId, { ...current, changes });
   // An edit made before the stored copy arrived is newer than that copy.
   loaded.add(appId);
   emit();
-  void writeMeta(listingDraftsKey(appId), changes).catch((error) => console.error('Keeping the listing edits failed', error));
+  const previous = writes.get(appId) ?? Promise.resolve();
+  const save = previous.catch(() => {}).then(() => writeMeta(listingDraftsKey(appId), changes));
+  writes.set(appId, save);
+  try { await save; }
+  finally { if (writes.get(appId) === save) writes.delete(appId); }
 }
 
 export function setListingAiIssues(appId: string, update: Update<ListingIssue[]>): void {
@@ -88,20 +98,33 @@ export function setListingNote(appId: string, note: ListingNote | null): void {
   emit();
 }
 
-/** Forget an app's drafts in memory, after its stored data was removed. */
-export function discardListingDrafts(appId: string): void {
+/** Remove an app's stored data after its pending listing writes finish. */
+export async function discardListingDrafts(appId: string): Promise<void> {
   drafts.delete(appId);
-  loaded.delete(appId);
+  loaded.add(appId);
   emit();
+  const previous = writes.get(appId) ?? Promise.resolve();
+  const removal = previous.catch(() => {}).then(() => clearApp(appId));
+  writes.set(appId, removal);
+  try { await removal; }
+  finally { if (writes.get(appId) === removal) writes.delete(appId); }
 }
 
-async function loadStored(appId: string): Promise<void> {
+export async function loadStoredListingDrafts(appId: string): Promise<void> {
   if (loaded.has(appId)) return;
-  loaded.add(appId);
-  const stored = await readMeta<ListingChange[]>(listingDraftsKey(appId));
-  if (!stored?.length || getListingDrafts(appId).changes.length > 0) return;
-  drafts.set(appId, { ...getListingDrafts(appId), changes: stored });
-  emit();
+  const pending = loading.get(appId);
+  if (pending) return pending;
+  const read = (async () => {
+    const stored = await readMeta<ListingChange[]>(listingDraftsKey(appId));
+    if (loaded.has(appId)) return;
+    loaded.add(appId);
+    if (!stored?.length || getListingDrafts(appId).changes.length > 0) return;
+    drafts.set(appId, { ...getListingDrafts(appId), changes: stored });
+    emit();
+  })();
+  loading.set(appId, read);
+  try { await read; }
+  finally { if (loading.get(appId) === read) loading.delete(appId); }
 }
 
 /** An app's drafts, re-rendering on every change, with the stored ones read in on first use. */
@@ -112,7 +135,7 @@ export function useListingDrafts(appId: string): ListingDrafts {
     () => EMPTY
   );
   useEffect(() => {
-    void loadStored(appId).catch((error) => console.error('Reading the kept listing edits failed', error));
+    void loadStoredListingDrafts(appId).catch((error) => console.error('Reading the kept listing edits failed', error));
   }, [appId]);
   return value;
 }

@@ -25,7 +25,7 @@ import { EXIT, OsgError, usageError } from '../errors.js';
 import { debug, dim, emit, fail, info, warn } from '../log.js';
 import { writeBackIdentity, type ProjectIdentity } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
-import { requireToolConfirmation } from '../safetyFlags.js';
+import { confirmedToolArgs, requireToolConfirmation } from '../safetyFlags.js';
 
 /** The project file on disk, by its own id and name. */
 interface ProjectFile extends ProjectIdentity {
@@ -54,7 +54,7 @@ export async function run(ctx: CommandContext): Promise<number> {
 
   let result: unknown;
   try {
-    result = await session.call(tool, args);
+    result = await session.call(tool, confirmedToolArgs(tool, args, flagBool(flags, 'yes')));
   } catch (error) {
     // The app's own message, unchanged: it names the artboard that does not
     // exist or the property that was rejected, and rewording it would only

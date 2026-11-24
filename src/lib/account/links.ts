@@ -128,12 +128,20 @@ export async function putAccountLink(link: AccountProjectLink): Promise<void> {
 /** Turn unattended pushes on or off for one project. */
 export async function setAccountLinkAutoSync(projectId: string, autoSync: boolean): Promise<void> {
   try {
-    const row = await db.accountLinks.get(projectId);
-    if (!row) return;
-    await db.accountLinks.put({ ...row, autoSync });
+    await setAccountLinkAutoSyncStrict(projectId, autoSync);
   } catch (error) {
     console.error('Could not change syncing for this project', error);
   }
+}
+
+export async function setAccountLinkAutoSyncStrict(projectId: string, autoSync: boolean, matches?: (row: AccountProjectLink) => boolean): Promise<boolean> {
+  return db.transaction('rw', db.accountLinks, async () => {
+    const row = await db.accountLinks.get(projectId);
+    if (!row) return false;
+    if (matches && !matches(row)) throw new Error('The account link changed. Preview again.');
+    if (row.autoSync !== autoSync) await db.accountLinks.put({ ...row, autoSync });
+    return true;
+  });
 }
 
 /** Forget a link, because the remote copy is gone. */

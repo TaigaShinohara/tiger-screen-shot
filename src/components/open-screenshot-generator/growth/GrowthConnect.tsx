@@ -30,7 +30,6 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { openExternal } from '@/lib/desktop';
 import { growthAiUnavailableReason, type GrowthAiWriterChoice } from '@/lib/growth/ai';
-import { clearApp } from '@/lib/growth/db';
 import { discardListingDrafts } from '@/lib/growth/listingDrafts';
 import { discardReportSummaries } from '@/lib/growth/reportSummaries';
 import { formatAgo } from '@/lib/growth/format';
@@ -513,8 +512,7 @@ export function GrowthConnect({ desktop, onSync }: { desktop: boolean; onSync: (
                   size="sm"
                   variant="destructive"
                   onClick={() => {
-                    void clearApp(view.app.id);
-                    discardListingDrafts(view.app.id);
+                    void discardListingDrafts(view.app.id).catch((error) => console.error('Removing the app data failed', error));
                     discardReportSummaries(view.app.id);
                     setConfirmClear(false);
                   }}

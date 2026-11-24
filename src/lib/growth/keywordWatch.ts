@@ -117,6 +117,24 @@ function validCountries(countries: string[]): string[] {
   return Array.from(new Set(countries.map((code) => code.toUpperCase()).filter((code) => TERRITORY_CODES.includes(code)))).slice(0, MAX_KEYWORD_COUNTRIES);
 }
 
+export function planTrackedKeywords(current: KeywordList, terms: string[], source: KeywordSource, now: number) {
+  const have = new Set(current.keywords.map((keyword) => keyword.term));
+  const keywords = [...current.keywords];
+  const added: string[] = [];
+  let refused = 0;
+  for (const raw of terms) {
+    const term = normalizeTerm(raw);
+    if (!term || have.has(term)) continue;
+    if (keywords.length >= MAX_KEYWORDS) { refused++; continue; }
+    have.add(term);
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID() : `keyword-${now}-${Math.random().toString(36).slice(2)}`;
+    keywords.push({ id, term, addedAt: now, source });
+    added.push(term);
+  }
+  return { keywords, added, refused };
+}
+
 async function changeList(owner: string, change: (list: KeywordList) => KeywordList, create?: () => KeywordList): Promise<KeywordList | null> {
   const result = await withListLock(async () => {
     const current = (await readKeywordList(owner)) ?? (create ? create() : null);
@@ -143,21 +161,10 @@ export async function trackKeywords(
   await changeList(
     owner,
     (current) => {
-      const have = new Set(current.keywords.map((keyword) => keyword.term));
-      const keywords = [...current.keywords];
-      const now = Date.now();
-      for (const raw of terms) {
-        const term = normalizeTerm(raw);
-        if (!term || have.has(term)) continue;
-        if (keywords.length >= MAX_KEYWORDS) {
-          outcome.refused += 1;
-          continue;
-        }
-        have.add(term);
-        keywords.push({ term, addedAt: now, source: options.source });
-        outcome.added.push(term);
-      }
-      return { ...current, keywords };
+      const plan = planTrackedKeywords(current, terms, options.source, Date.now());
+      outcome.added.push(...plan.added);
+      outcome.refused += plan.refused;
+      return { ...current, keywords: plan.keywords };
     },
     () => ({ owner, keywords: [], countries: validCountries(options.countries.length ? options.countries : ['US']) })
   );
@@ -167,6 +174,18 @@ export async function trackKeywords(
 /** Stop tracking a keyword. Its past ranks stay in the database, so tracking it again brings them back. */
 export async function untrackKeyword(owner: string, term: string): Promise<void> {
   await changeList(owner, (current) => ({ ...current, keywords: current.keywords.filter((keyword) => keyword.term !== term) }));
+}
+
+export async function untrackKeywordIfUnchanged(owner: string, term: string, expected: { id: string | null; addedAt: number }): Promise<'removed' | 'missing' | 'changed'> {
+  let outcome: 'removed' | 'missing' | 'changed' = 'missing';
+  await changeList(owner, (current) => {
+    const found = current.keywords.find((keyword) => keyword.term === term);
+    if (!found) return current;
+    if ((found.id ?? null) !== expected.id || found.addedAt !== expected.addedAt) { outcome = 'changed'; return current; }
+    outcome = 'removed';
+    return { ...current, keywords: current.keywords.filter((keyword) => keyword.term !== term) };
+  });
+  return outcome;
 }
 
 /** Change the countries a list checks, on the stored list in its turn. A list keeps one country at least. */
