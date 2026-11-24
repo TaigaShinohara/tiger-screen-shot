@@ -1,9 +1,5 @@
 // Google Analytics (GA4) event tracking for the editor.
 //
-// One GA4 property (G-8LQTR1SPDK) serves both the marketing site and this
-// editor; GA splits the traffic by hostname (openscrgen.app vs
-// editor.openscrgen.app) so a single measurement id is all we need.
-//
 // We only ever send coarse, non-identifying interaction signals: which
 // template was picked, which device format was chosen, and that an export
 // happened. We never send project content, screenshots, file names, or
@@ -13,7 +9,7 @@
 // gtag.js itself is injected by <Analytics /> (see src/components/Analytics.tsx).
 
 export const GA_MEASUREMENT_ID =
-  process.env.NEXT_PUBLIC_GA_ID || 'G-8LQTR1SPDK';
+  process.env.NEXT_PUBLIC_GA_ID ?? '';
 
 declare global {
   interface Window {
