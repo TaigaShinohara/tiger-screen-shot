@@ -1,0 +1,67 @@
+{
+  "app": "tiger screen shot",
+  "app_version": "1.0.9",
+  "schema_version": 1,
+  "agent_level": 0,
+  "target_level": 2,
+  "level_note": "Partial L1–L3 capabilities; requirements for L1 are not complete.",
+  "guide": "docs/AGENT_GUIDE.md",
+  "operations": "docs/AGENT_OPERATIONS.md",
+  "commands": [
+    "doctor",
+    "init",
+    "templates",
+    "import",
+    "new",
+    "fill",
+    "design",
+    "edit",
+    "call",
+    "render",
+    "video",
+    "localize",
+    "verify",
+    "manifest",
+    "studio",
+    "upload",
+    "mcp",
+    "install",
+    "cache",
+    "editor",
+    "all"
+  ],
+  "json_schema_version": null,
+  "dry_run": [
+    "upload",
+    "cache prune",
+    "localize --csv-in (without other writes)"
+  ],
+  "mcp": {
+    "available": true,
+    "transport": [
+      "stdio",
+      "http-loopback"
+    ],
+    "endpoint": "127.0.0.1:8722 (HTTP default; bearer token required)",
+    "tools": "cli/tools.json and live tools/list",
+    "tools_generated_from": "editor MCP tool definitions"
+  },
+  "sdk": {
+    "available": false,
+    "language": null
+  },
+  "human_only": [
+    {
+      "operation": "OS permissions and device authorization",
+      "reason": "OS or device requires user action"
+    },
+    {
+      "operation": "account sign-in and CAPTCHA",
+      "reason": "requires account holder interaction"
+    },
+    {
+      "operation": "visual quality judgment",
+      "reason": "automated store checks cannot assess appearance"
+    }
+  ]
+}

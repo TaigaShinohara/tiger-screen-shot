@@ -1,0 +1,29 @@
+# Agent operation catalog
+
+Audit date: 2026-11-24. This catalog groups actions a person can name; the exact design tool schemas are in `cli/tools.json` and the live MCP `tools/list`. The desktop editor stores projects and history in IndexedDB; the CLI opens an exported project file in the same editor and writes it back. The editor also has account and cloud sync. IDs in a saved project are used by the design tools, but import and recreation do not promise to preserve every ID.
+
+| Operation and human path | Machine path and input → output | Side effects and limitations |
+| --- | --- | --- |
+| Inspect templates; choose one on the start screen | `osg templates --json` → template metadata | Reads the packaged templates. |
+| Create or import a project from the start screen | `osg init`, `new`, `fill`, `import`, `design` → configuration, project or downloaded assets | Writes local files; import and design can contact external services. Design can use a paid provider. |
+| Open a project, inspect boards, layers and locales | `osg call list_artboards`, `get_artboard`, `list_locales`; `osg call --list --json` → JSON | Uses the editor bridge. CLI works with an exported project file, not the desktop app's project database. `call` does not save to the file unless `--save` is used. |
+| Edit, add, remove, reorder or group boards and elements | `osg edit --tool ...` or `osg call <tool> ... --save`; MCP design tools → results and IDs | Writes project state. Removal is destructive. `edit` saves by default and can save successful earlier calls after a later call fails. No general dry run or idempotency key. |
+| Manage languages and translated copy in the editor | `osg localize` and locale design tools → locale state or translation results | Adding, editing or translating writes project data; translation can send text to a provider. `--dry-run` only supports CSV import without other writes. CSV export writes a file. |
+| Export screenshots and preview video | `osg render`, `osg video`, export tools → files | Writes output files; rendering can fetch uncached assets and fonts. |
+| Review a store set | `osg verify <dir> --store appstore\|play --json`; `osg manifest` → verdicts or manifest | Verify reads exported files; manifest writes a file. Store rules cannot assess visual quality or guarantee acceptance. |
+| Capture a device in the Capture view | Desktop MCP `list_capture_devices`, `capture_screenshot` → device list or image placement | Requires the desktop environment and device tooling. OS permissions and device authorization remain human actions. Physical device behavior requires device testing. |
+| Upload screenshots to a store | `osg upload --store ... --dry-run`, then `osg upload` → plan or upload result | Dry run still reads credentials, contacts the store and renders; it does not upload images. A real upload changes store data and may replace existing images with `--replace`. Requires explicit authorization. |
+| Manage local cache | `osg cache info`, `warm`, `seed`, `prune` → cache information or result | Warm may download; seed writes; prune deletes. `prune --dry-run` previews removal. |
+| Select editor and open Studio | `osg editor status\|use\|reset`, `osg studio` | `use` and `reset` change CLI configuration; Studio opens an editor. |
+| Diagnose environment | `osg doctor --json` | Starts a browser and makes a temporary probe database; `--install-browser` downloads and installs a browser. It is not a strictly side-effect-free status command. |
+| Batch the pipeline | `osg all` | Can write files and invoke model services. Review the requested flags and outputs first. |
+| Expose or register MCP | `osg mcp --stdio` or `--http`; `osg install` | MCP serves tools with read and write capabilities. Install edits agent configuration. HTTP binds loopback and requires a token. |
+| Sync, share, collaborate, publish a website, manage Growth or account settings | GUI and the specific documented integrations in `docs/ACCOUNT-SYNC.md`, `docs/WEBSITE.md`, `docs/GROWTH.md` | Some Growth reads have desktop MCP tools; complete command coverage is not established. These operations may contact external services or publish information. Obtain authorization for external writes. |
+| Inspect versions or undo in the editor | GUI project history | No general CLI history of project operations or failed runs is established. |
+| Grant OS permissions, authorize a device, sign in, solve CAPTCHA, judge visual quality | Human in the relevant OS, account or editor screen | Human action is required. Do not claim a headless check verified visual quality. |
+
+## Audit and target
+
+Current strict level: **L0 with partial L1–L3 capabilities**. A CLI and MCP exist and cover many editor actions, but there is no complete read-only status/list/get/history contract, uniform versioned JSON envelope, or safe dry run for all writes. Target: **L2**, reached only after those read paths and the principal operations are covered and tested. L3 remains a later step; the existing export verifier alone does not establish it.
+
+The GUI and the CLI both use the editor bridge and design tools; some state and orchestration remain in the layout. Project versions exist in Dexie, but they are not a CLI execution history. Unit tests and browser tests exist; see `docs/CLI.md` and the repository test scripts. Stable IDs across all import and migration paths, real devices, live stores and external integrations are not verified by this audit.
