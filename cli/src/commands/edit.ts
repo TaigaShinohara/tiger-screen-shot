@@ -32,6 +32,8 @@ import {
   type ProjectIdentity,
 } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
+import { assertProjectAssets, snapshotProjectAssets, projectFileFingerprint, writeProjectAtomically } from '../projectAssets.js';
+import { openProject } from './render.js';
 import { projectDataOf } from '../projectDocument.js';
 import { confirmedToolArgs, requireToolConfirmation } from '../safetyFlags.js';
 
@@ -56,6 +58,7 @@ export async function run(ctx: CommandContext): Promise<number> {
   const keepGoing = flagBool(flags, 'continue-on-error', false);
   const save = flagBool(flags, 'save', true);
 
+  const expectedHash = projectFileFingerprint(ctx.projectFile);
   const session = await ctx.session();
   const loaded = await openProjectFile(ctx, session);
   // The editor's project, followed call by call so the write back can tell a
@@ -95,7 +98,7 @@ export async function run(ctx: CommandContext): Promise<number> {
   let saved: string | null = null;
   // Nothing changed means nothing to write, and rewriting the file after a run
   // that only failed would churn the diff for no reason.
-  if (save && succeeded > 0) saved = await writeProjectFile(ctx, session, loaded, followed);
+  if (save && succeeded > 0) saved = await writeProjectFile(ctx, session, loaded, followed, expectedHash);
 
   const status = await session.status();
   info(
@@ -272,12 +275,17 @@ async function openProjectFile(ctx: CommandContext, session: Session): Promise<L
   }
 
   const project = readProjectFile(file, ctx.config.name);
+  assertProjectAssets(file);
   // The editor opens no project without an artboard, so a file with none is
   // edited the way a missing one is, from the empty document. Its id and name
   // are still handed back, for the write back.
   if (!canOpenAsProject(project.data)) {
     warn(`${file} has no artboards, editing the empty document`);
     return { ...project, opened: false };
+  }
+  if (!Array.isArray(JSON.parse(fs.readFileSync(file, 'utf8')))) {
+    await openProject(ctx, session);
+    return { ...project, opened: true };
   }
   // page.evaluate is handed a string by the driver, so the document travels as
   // a literal in the expression rather than as an argument.
@@ -338,7 +346,8 @@ async function writeProjectFile(
   ctx: CommandContext,
   session: Session,
   loaded: LoadedProject | null,
-  followed: EditorProject | null
+  followed: EditorProject | null,
+  expectedHash: string | null
 ): Promise<string> {
   const status = await session.status();
   const projectData: unknown[] = [];
@@ -354,9 +363,10 @@ async function writeProjectFile(
     ? writeBackIdentity(loaded, followed, status)
     : { id: status.projectId ?? `project_${Date.now()}`, name: status.projectName ?? ctx.config.name ?? 'Project' };
 
+  const assets = await snapshotProjectAssets(session, projectData);
   const file = ctx.projectFile;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(
+  writeProjectAtomically(
     file,
     `${JSON.stringify(
       {
@@ -364,11 +374,12 @@ async function writeProjectFile(
         name: identity.name,
         timestamp: new Date().toISOString(),
         projectData,
+        ...assets,
       },
       null,
       2
     )}\n`,
-    'utf8'
+    expectedHash
   );
   return file;
 }

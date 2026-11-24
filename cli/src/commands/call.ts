@@ -25,6 +25,8 @@ import { EXIT, OsgError, usageError } from '../errors.js';
 import { debug, dim, emit, fail, info, warn } from '../log.js';
 import { writeBackIdentity, type ProjectIdentity } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
+import { assertProjectAssets, snapshotProjectAssets, projectFileFingerprint, writeProjectAtomically } from '../projectAssets.js';
+import { openProject } from './render.js';
 import { confirmedToolArgs, requireToolConfirmation } from '../safetyFlags.js';
 
 /** The project file on disk, by its own id and name. */
@@ -49,6 +51,7 @@ export async function run(ctx: CommandContext): Promise<number> {
   const raw = inline ?? (await readStdin());
   const args = raw && raw.trim() ? parseArgs(raw) : {};
 
+  const expectedHash = projectFileFingerprint(ctx.projectFile);
   const session = await ctx.session();
   const file = await openProjectFile(ctx, session);
 
@@ -65,7 +68,7 @@ export async function run(ctx: CommandContext): Promise<number> {
   }
 
   if (flagBool(flags, 'save', false)) {
-    const written = await writeProjectFile(ctx, session, file);
+    const written = await writeProjectFile(ctx, session, file, expectedHash);
     info(dim(`project: ${written}`));
   }
 
@@ -145,6 +148,7 @@ async function openProjectFile(ctx: CommandContext, session: Session): Promise<P
     );
   }
 
+  assertProjectAssets(file);
   const record = Array.isArray(parsed) ? { projectData: parsed } : ((parsed ?? {}) as Record<string, unknown>);
   const data = record.projectData;
   if (!Array.isArray(data)) {
@@ -159,6 +163,10 @@ async function openProjectFile(ctx: CommandContext, session: Session): Promise<P
     return { id, name, opened: false };
   }
 
+  if (!Array.isArray(parsed)) {
+    await openProject(ctx, session);
+    return { id, name, opened: true };
+  }
   // The driver hands page.evaluate a string, so the document travels as a
   // literal in the expression rather than as an argument.
   const script = `(async () => {
@@ -176,7 +184,7 @@ async function openProjectFile(ctx: CommandContext, session: Session): Promise<P
  * keeps its own id and name (see projectIdentity.ts); with no file, the
  * editor's project gives both.
  */
-async function writeProjectFile(ctx: CommandContext, session: Session, file: ProjectFile | null): Promise<string> {
+async function writeProjectFile(ctx: CommandContext, session: Session, file: ProjectFile | null, expectedHash: string | null): Promise<string> {
   const status = await session.status();
   const projectData: unknown[] = [];
   for (const board of status.artboards) {
@@ -192,9 +200,10 @@ async function writeProjectFile(ctx: CommandContext, session: Session, file: Pro
     ? writeBackIdentity(file, file.opened ? { projectId: file.id, projectName: file.name } : null, status)
     : { id: status.projectId ?? `project_${Date.now()}`, name: status.projectName || ctx.config.name || 'Project' };
 
+  const assets = await snapshotProjectAssets(session, projectData);
   const target = ctx.projectFile;
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(
+  writeProjectAtomically(
     target,
     `${JSON.stringify(
       {
@@ -202,11 +211,12 @@ async function writeProjectFile(ctx: CommandContext, session: Session, file: Pro
         name: identity.name,
         timestamp: new Date().toISOString(),
         projectData,
+        ...assets,
       },
       null,
       2
     )}\n`,
-    'utf8'
+    expectedHash
   );
   return target;
 }
