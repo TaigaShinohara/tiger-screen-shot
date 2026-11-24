@@ -353,6 +353,41 @@ test.describe('versions panel', () => {
     await expect(app.elementsOn(0)).toHaveCount(2);
   });
 
+  test('the built-in agent previews and restores the open project version', async ({ app, page, tauri, isDesktop }) => {
+    test.skip(!isDesktop, 'The built-in agent uses the desktop MCP bridge');
+    await app.startBlankProject();
+    await app.ensurePaletteOpen();
+    await app.addElementFrom('Basic', 'Text', 'basic:text');
+    await app.dockTab('Versions').click();
+    await saveNamedVersion(page, 'Agent restore');
+    const version = (await readVersions(page)).find((row) => row.label === 'Agent restore')!;
+    await app.addElement('Rectangle', 'basic:rectangle');
+    await expect(app.elementsOn(0)).toHaveCount(2);
+    let number = 0;
+    const call = async (args: Record<string, unknown>, agent: boolean) => {
+      const callId = `version-restore-${++number}`;
+      await tauri.emitFromBackend('abs-mcp-request', { callId, nonce: 'e2e-bridge-nonce', agent, message: { jsonrpc: '2.0', id: number, method: 'tools/call', params: { name: 'restore_project_version', arguments: args } } });
+      const reply = async () => (await tauri.callsTo('abs_mcp_respond')).find((entry) => entry.args.callId === callId);
+      await expect.poll(async () => !!await reply()).toBe(true);
+      return (await reply())!.args.response as { result: { isError?: boolean; content: Array<{ text: string }> } };
+    };
+    const args = { projectId: version.projectId, versionId: version.id };
+    expect((await call(args, false)).result.isError).toBe(true);
+    const preview = await call(args, true);
+    expect(preview.result.isError).not.toBe(true);
+    const plan = JSON.parse(preview.result.content[0].text);
+    expect(plan).toMatchObject({ dryRun: true, versionId: version.id, liveEditing: false });
+    expect((await call({ ...args, dryRun: false, confirmed: true, expectedPlan: 'wrong' }, true)).result.isError).toBe(true);
+    await expect(app.elementsOn(0)).toHaveCount(2);
+    const applied = await call({ ...args, dryRun: false, confirmed: true, expectedPlan: plan.expectedPlan }, true);
+    expect(applied.result.isError, applied.result.content[0].text).not.toBe(true);
+    expect(JSON.parse(applied.result.content[0].text)).toMatchObject({ restored: true, safetyVersionSaved: true, persistence: 'pending' });
+    await expect(app.elementsOn(0)).toHaveCount(1);
+    await expect(versionRow(page, 'Before restore')).toHaveCount(1);
+    await app.undoButton.click();
+    await expect(app.elementsOn(0)).toHaveCount(2);
+  });
+
   test('Delete this version removes the row and the Dexie record', async ({ app, page }) => {
     await app.startBlankProject();
     await app.dockTab('Versions').click();

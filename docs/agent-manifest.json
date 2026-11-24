@@ -52,6 +52,7 @@
     "tools": "cli/tools.json and live tools/list",
     "tools_generated_from": "editor MCP tool definitions",
     "built_in_agent_only": [
+      "restore_project_version",
       "create_website_draft",
       "publish_website_draft",
       "translate_website_draft",
