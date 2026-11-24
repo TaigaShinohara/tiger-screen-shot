@@ -18,6 +18,7 @@ test('rejects dry runs that would otherwise perform writes', () => {
 
 test('accepts only the operations that implement dry run', () => {
   for (const argv of [
+    ['deliver', 'create', '--dry-run'],
     ['deliver', 'prepare', '--dry-run'],
     ['upload', '--dry-run'],
     ['cache', 'prune', '--dry-run'],

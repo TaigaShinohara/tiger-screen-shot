@@ -39,6 +39,7 @@
   "json_schema_version": null,
   "agent_json_schema_version": 1,
   "dry_run": [
+    "deliver create",
     "deliver prepare",
     "upload",
     "cache prune",

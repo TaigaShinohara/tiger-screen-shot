@@ -17,13 +17,13 @@ export function validateSafetyFlags(args: ParsedArgs): void {
     throw usageError(`--timeout is not supported by osg ${command}.`);
   }
   if (flags['dry-run'] === undefined) return;
-  const deliveryPreview = command === 'deliver' && (!positionals[0] || positionals[0] === 'prepare');
+  const deliveryPreview = command === 'deliver' && (!positionals[0] || positionals[0] === 'prepare' || positionals[0] === 'create');
   const cachePrune = command === 'cache' && positionals[0]?.toLowerCase() === 'prune';
   const csvImport = command === 'localize' && !!flagString(flags, 'csv-in') &&
     !flags.add && !flags.base && !flags.text && !flags['csv-out'] && !flagBool(flags, 'translate');
   if (command !== 'upload' && !cachePrune && !csvImport && !deliveryPreview) {
     throw usageError(`--dry-run is not supported for this osg ${command} operation.`,
-      'Supported operations: deliver prepare, upload, cache prune, and localize --csv-in without other writes.');
+      'Supported operations: deliver create/prepare, upload, cache prune, and localize --csv-in without other writes.');
   }
 }
 

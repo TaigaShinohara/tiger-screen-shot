@@ -73,6 +73,36 @@ test('delivery dry run reads inputs but writes nothing and binds exact captures'
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('draft creation previews the brief without a project or writes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-delivery-create-'));
+  try {
+    const f = fixture(root);
+    const brief = JSON.parse(fs.readFileSync(f.spec, 'utf8'));
+    delete brief.groups[0].project; delete brief.groups[0].screens[0].boardId;
+    fs.writeFileSync(f.spec, JSON.stringify(brief));
+    const before = fs.readdirSync(root).sort();
+    const output = await invoke(root, ['create', '--spec', f.spec, '--work', path.join(root, 'draft'), '--dry-run']);
+    assert.equal(output.result.status, 'planned'); assert.equal(output.result.plan.groups[0].screens[0].sha256, sha256(png));
+    assert.deepEqual(fs.readdirSync(root).sort(), before);
+    brief.groups[0].screens[0].inputLocale = 'en'; fs.writeFileSync(f.spec, JSON.stringify(brief));
+    await assert.rejects(invoke(root, ['create', '--spec', f.spec, '--work', path.join(root, 'draft'), '--dry-run']), /Input screenshot language differs/);
+    assert.equal(fs.existsSync(path.join(root, 'draft')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a generated delivery plan rejects a changed original brief', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-delivery-brief-'));
+  try {
+    const f = fixture(root), original = path.join(root, 'brief.json');
+    fs.writeFileSync(original, 'original');
+    const derived = { ...f.value, requestSource: { file: original, sha256: sha256(Buffer.from('original')) } };
+    fs.writeFileSync(f.spec, JSON.stringify(derived));
+    assert.equal(readDeliveryPlan(f.spec).requestSource?.sha256, sha256(Buffer.from('original')));
+    fs.writeFileSync(original, 'changed');
+    assert.throws(() => readDeliveryPlan(f.spec), /original delivery request changed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('delivery rejects missing boards, wrong store formats and languages', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'osg-delivery-invalid-'));
   try {

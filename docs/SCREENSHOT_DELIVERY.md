@@ -1,8 +1,17 @@
 # Screenshot delivery
 
-This workflow prepares existing, editable projects with real captures. It does not submit to a store. AI agents create or edit the projects using the editor's existing tools, then run this delivery workflow. Capture can provide screenshots using the desktop app; export the originals to files first. This command does not automate device setup or arbitrary app navigation.
+This workflow creates or prepares editable projects with real captures. It does not submit to a store. Capture can provide screenshots using the desktop app; export the originals to files first. This command does not automate device setup or arbitrary app navigation.
 
-Create one project per device layout. Each board must visibly contain the corresponding original capture as an inline image or bundled `asset:`. Use exact original bytes; a resized or re-encoded copy cannot prove this relationship. The agent must replace template examples and write accurate copy from the supplied brief. A bare template is not a finished design.
+For an initial design, use the same spec as below but omit each group's `project` and each screen's `boardId`. Set `projectLocale` to `null`. Supply a short, verified claim for each screen: it becomes the headline, so do not invent features or use generic template copy. `osg deliver create` uses the editor's design tools to create one editable project per group, renders them and stops for visual review:
+
+```sh
+osg deliver create --spec brief.json --work ./delivery-draft --dry-run --agent-json
+OSG_EDITOR_DIR=/absolute/path/to/local/out osg deliver create --spec brief.json --work ./delivery-draft --offline --agent-json
+```
+
+The automatic initial layout supports Japanese and English. Other languages need a separately prepared project with an appropriate font. The generated spec is `delivery-draft/delivery-spec.json`; projects are `delivery-draft/<group>.project.json`, and the review workspace is `delivery-draft/review`. Initial layouts are proposals, never automatic visual approvals. Inspect them, edit the projects with the existing editor tools when needed, then use `prepare` with the generated spec and a **new** review workspace. A change to the original brief, an input or a project requires preparation again. The full-size output and thumbnail remain review-required until an AI with image viewing checks them.
+
+To prepare existing projects, use one project per device layout. Each board must visibly contain the corresponding original capture as an inline image or bundled `asset:`. Use exact original bytes; a resized or re-encoded copy cannot prove this relationship. The agent must replace template examples and write accurate copy from the supplied brief. A bare template is not a finished design.
 
 Write a UTF-8 JSON spec. Paths are relative to the spec file. Screens are in delivery order; each maps one original image to one board. `projectLocale` is the project's locale code, or `null` to use the base canvas. Set `locale` to the intended output language. The two codes must match when `projectLocale` is given.
 
