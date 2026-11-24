@@ -369,6 +369,7 @@ import {
   saveVersion,
   type ProjectVersionMeta,
 } from '@/lib/versions/store';
+import { applyVersionRestore, previewVersionRestore, type RestorePorts } from '@/lib/versions/restore';
 import {
   describeArtboardsChange,
   getElementDisplayName,
@@ -2736,6 +2737,7 @@ export function OpenScreenshotGeneratorLayout() {
    */
   const [versions, setVersions] = useState<ProjectVersionMeta[]>([]);
   const [isVersionBusy, setIsVersionBusy] = useState(false);
+  const versionBusyRef = useRef(false);
   /** The document as it was when this project opened, until the first edit. */
   const openedSnapshotRef = useRef<{ projectId: string; boards: ArtboardState[]; name: string } | null>(null);
   const lastAutoVersionRef = useRef(0);
@@ -2983,13 +2985,14 @@ export function OpenScreenshotGeneratorLayout() {
 
   /** Keep this exact state under a name. Never thinned away afterwards. */
   const handleSaveNamedVersion = async (label: string) => {
-    if (!activeProjectId || isVersionBusy) return;
+    if (!activeProjectId || versionBusyRef.current) return;
     // A version keeps the canvas, and while a project opens the canvas still
     // shows the one before it, so writeVersion keeps nothing then.
     if (activeProjectIdRef.current !== loadedProjectIdRef.current) {
       toast({ title: 'The version was not saved', description: PROJECT_STILL_OPENING, variant: 'destructive' });
       return;
     }
+    versionBusyRef.current = true;
     setIsVersionBusy(true);
     try {
       if (await writeVersion(artboardsRef.current, label, 'named')) {
@@ -3002,6 +3005,7 @@ export function OpenScreenshotGeneratorLayout() {
         });
       }
     } finally {
+      versionBusyRef.current = false;
       setIsVersionBusy(false);
     }
   };
@@ -3014,39 +3018,31 @@ export function OpenScreenshotGeneratorLayout() {
    * `handleArtboardsUpdate`, which means it is an ordinary edit: it lands in
    * undo, it is written to Dexie, and it reaches everybody in a live session.
    */
+  const versionRestorePorts = (): RestorePorts => ({
+    state: () => ({ projectId: activeProjectIdRef.current, loadedProjectId: loadedProjectIdRef.current, projectName: projectNameRef.current, openToken: projectOpenTokenRef.current, boards: artboardsRef.current, liveEditing: !!collabRef.current.room }),
+    read: readVersion,
+    canOpen: canOpenAsProject,
+    saveSafety: (state) => writeVersion(state.boards, 'Before restore', 'safety', state.projectId, state.projectName),
+    commit: (boards, label) => handleArtboardsUpdateRef.current(boards, namedChange('Restore version', 'open', label)),
+  });
+
   const handleRestoreVersion = async (version: ProjectVersionMeta) => {
-    if (isVersionBusy) return;
+    if (versionBusyRef.current) return;
+    versionBusyRef.current = true;
     setIsVersionBusy(true);
     try {
-      const restored = await readVersion(version.id);
-      if (!restored) {
-        toast({
-          title: 'That version could not be read',
-          description: 'It may have been cleared with the browser data.',
-          variant: 'destructive',
-        });
-        return;
-      }
-      // A project keeps at least one artboard (see canOpenAsProject).
-      if (!canOpenAsProject(restored.boards)) {
-        toast({ title: 'That version has no artboards', description: 'Nothing was changed.', variant: 'destructive' });
-        return;
-      }
-      await writeVersion(artboardsRef.current, 'Before restore', 'safety');
-      // The commit is refused when another project opened during the reads
-      // above, since this version belongs to the project that was open.
-      if (!handleArtboardsUpdate(restored.boards, namedChange('Restore version', 'open', version.label))) {
-        toast({ title: 'Restore failed', description: 'Nothing was changed.', variant: 'destructive' });
-        return;
-      }
+      const ports = versionRestorePorts();
+      const preview = await previewVersionRestore(version.projectId, version.id, ports);
+      await applyVersionRestore(version.projectId, version.id, preview.expectedPlan, ports);
       toast({
         title: 'Version restored',
         description: `"${version.label}" is on the canvas. Undo puts it back the way it was.`,
       });
     } catch (error) {
       console.error('Could not restore that version', error);
-      toast({ title: 'Restore failed', description: 'Nothing was changed.', variant: 'destructive' });
+      toast({ title: 'Restore failed', description: error instanceof Error ? error.message : 'Nothing was changed.', variant: 'destructive' });
     } finally {
+      versionBusyRef.current = false;
       setIsVersionBusy(false);
     }
   };
@@ -3059,7 +3055,8 @@ export function OpenScreenshotGeneratorLayout() {
    * is referenced by id and both projects are in the same browser.
    */
   const handleOpenVersionCopy = async (version: ProjectVersionMeta) => {
-    if (isVersionBusy) return;
+    if (versionBusyRef.current) return;
+    versionBusyRef.current = true;
     setIsVersionBusy(true);
     try {
       const restored = await readVersion(version.id);
@@ -3090,6 +3087,7 @@ export function OpenScreenshotGeneratorLayout() {
         variant: 'destructive',
       });
     } finally {
+      versionBusyRef.current = false;
       setIsVersionBusy(false);
     }
   };
@@ -11772,6 +11770,26 @@ const generateRandomProjectName = (): string => {
         projectName: version.projectName,
         boards: version.boards,
       }));
+    },
+    restoreProjectVersion: async (args, linksBlocked) => {
+      if (args.dryRun !== undefined && typeof args.dryRun !== 'boolean') throw new Error('dryRun must be true or false.');
+      if (args.confirmed !== undefined && typeof args.confirmed !== 'boolean') throw new Error('confirmed must be true or false.');
+      const ports = versionRestorePorts();
+      const commit = ports.commit;
+      ports.commit = (boards, label) => {
+        if (linksBlocked?.()) throw new Error('Restoring a version is unavailable while the agent may hold folder data.');
+        return commit(boards, label);
+      };
+      if (args.dryRun !== false) {
+        const plan = await previewVersionRestore(args.projectId, args.versionId, ports);
+        return { projectId: args.projectId, versionId: args.versionId, dryRun: true, label: plan.restored.meta.label, currentBoards: plan.state.boards.length, restoredBoards: plan.restored.boards.length, liveEditing: plan.state.liveEditing, expectedPlan: plan.expectedPlan };
+      }
+      if (args.confirmed !== true || typeof args.expectedPlan !== 'string') throw new Error('Confirm the preview before restoring.');
+      if (versionBusyRef.current) throw new Error('Another version operation is running.');
+      versionBusyRef.current = true;
+      setIsVersionBusy(true);
+      try { return { dryRun: false, ...await applyVersionRestore(args.projectId, args.versionId, args.expectedPlan, ports) }; }
+      finally { versionBusyRef.current = false; setIsVersionBusy(false); }
     },
     listAiRuns: async (limit) => {
       const runs = await listOperationsStrict(limit);

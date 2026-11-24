@@ -81,6 +81,20 @@ test('saved project versions are read-only and lookup failures are reported', as
   assert.equal((invalid as CallResult).result?.isError, true);
 });
 
+test('only built-in agents can request restoration of a saved version', async () => {
+  const { api, calls } = fakeApi();
+  const denied = await handleMcpMessage(call('restore_project_version', { projectId: 'p1', versionId: 'v1' }), api, { agent: false });
+  assert.equal((denied as CallResult).result?.isError, true);
+  assert.equal(calls.includes('restoreProjectVersion'), false);
+  const allowed = await handleMcpMessage(call('restore_project_version', { projectId: 'p1', versionId: 'v1' }), api, { agent: true });
+  assert.notEqual((allowed as CallResult).result?.isError, true);
+  assert.equal(calls.includes('restoreProjectVersion'), true);
+  const blocked = fakeApi({ mayHold: true });
+  const sensitive = await handleMcpMessage(call('restore_project_version', { projectId: 'p1', versionId: 'v1' }), blocked.api, { agent: true });
+  assert.equal((sensitive as CallResult).result?.isError, true);
+  assert.equal(blocked.calls.includes('restoreProjectVersion'), false);
+});
+
 test('AI run summaries omit prompts, provider replies and error details', async () => {
   const summary = summarizeOperation({
     id: 'op1', mode: 'api', provider: 'example', providerLabel: 'Example',

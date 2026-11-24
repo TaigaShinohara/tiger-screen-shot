@@ -504,6 +504,7 @@ export interface McpDesignApi {
   /** Saved projects, newest first (the Recent projects list). */
   listProjects(): Promise<McpProjectSummary[]>;
   listProjectVersions(projectId: string): Promise<Array<{ id: string; createdAt: string; label: string; kind: string; projectName: string; boards: number }>>;
+  restoreProjectVersion(args: { projectId: string; versionId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }, linksBlocked?: () => boolean): Promise<unknown>;
   listAiRuns(limit: number): Promise<Array<{ id: string; mode: string; status: string; startedAt: string; endedAt: string | null }>>;
   getWebsiteDraft(projectId: string): Promise<unknown>;
   createWebsiteDraft(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedAt?: unknown; expectedPlan?: unknown }): Promise<unknown>;
@@ -2776,6 +2777,18 @@ const TOOLS: ToolDef[] = [
     run: async (args, api) => {
       if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
       return textResult(await api.listProjectVersions(args.projectId));
+    },
+  },
+  {
+    name: 'restore_project_version',
+    description: "Preview or restore a saved version of the open project. The current state is saved as a safety version first. Live editing can send the restored state to peers. Defaults to dryRun; applying requires confirmed=true and expectedPlan. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, versionId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['projectId', 'versionId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can restore project versions."), isError: true };
+      if (typeof args.projectId !== 'string' || typeof args.versionId !== 'string') return { ...textResult('Pass a project ID and version ID.'), isError: true };
+      const linksBlocked = () => ctx.folders === true || webLinksOff(api);
+      if (linksBlocked()) return { ...textResult(WEB_LINKS_OFF), isError: true };
+      return textResult(await api.restoreProjectVersion(args as Parameters<McpDesignApi['restoreProjectVersion']>[0], linksBlocked));
     },
   },
   {
