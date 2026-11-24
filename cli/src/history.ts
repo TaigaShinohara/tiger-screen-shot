@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseArgs, flagBool } from './args.js';
 
-const RECORDED = new Set(['init', 'import', 'new', 'fill', 'design', 'edit', 'call', 'desktop-call', 'render', 'video', 'localize', 'manifest', 'upload', 'cache', 'editor', 'install', 'all']);
+const RECORDED = new Set(['init', 'import', 'new', 'fill', 'design', 'edit', 'call', 'desktop-call', 'render', 'video', 'localize', 'manifest', 'upload', 'cache', 'editor', 'install', 'all', 'deliver']);
 const MAX_BYTES = 1024 * 1024;
 
 export interface HistoryEntry {
@@ -28,6 +28,7 @@ export function historyFile(): string {
 
 export function recordCommand(argv: string[], exitCode: number, requestId?: string, outcome?: string): void {
   const args = parseArgs(argv);
+  if (args.command === 'deliver' && flagBool(args.flags, 'dry-run')) return;
   if (!RECORDED.has(args.command) || flagBool(args.flags, 'help') || flagBool(args.flags, 'h')) return;
   const file = historyFile();
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

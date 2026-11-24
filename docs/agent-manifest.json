@@ -23,6 +23,7 @@
     "call",
     "desktop-call",
     "render",
+    "deliver",
     "video",
     "localize",
     "verify",
@@ -38,6 +39,7 @@
   "json_schema_version": null,
   "agent_json_schema_version": 1,
   "dry_run": [
+    "deliver prepare",
     "upload",
     "cache prune",
     "localize --csv-in (without other writes)"
@@ -100,8 +102,8 @@
       "reason": "requires account holder interaction"
     },
     {
-      "operation": "visual quality judgment",
-      "reason": "automated store checks cannot assess appearance"
+      "operation": "visual quality judgment without image viewing",
+      "reason": "automated store checks cannot assess appearance; an AI or person with image viewing must review every image"
     }
   ],
   "versioned_json_commands": {

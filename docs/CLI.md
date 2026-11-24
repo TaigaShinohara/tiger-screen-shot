@@ -365,6 +365,10 @@ scaled uniformly to the new canvas and re-centred, and text is scaled by
 and ignores `element.scale`. That is why one canvas covers every size, and why
 the numbers come out identical to the desktop export.
 
+### `osg deliver`
+
+Prepare, visually review and package screenshots from real captures and existing editable projects. See [SCREENSHOT_DELIVERY.md](SCREENSHOT_DELIVERY.md) for the input specification, review and output. Preparation ends with review required; only a completed AI-reported review allows finishing.
+
 ### `osg video`
 
 The MP4 app preview run. Needs a branded Chrome or Edge: the encode goes through

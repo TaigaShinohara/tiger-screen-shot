@@ -103,6 +103,12 @@ const COMMANDS: CommandSpec[] = [
     load: () => import('./commands/render.js'),
   },
   {
+    name: 'deliver',
+    summary: 'Prepare and review a screenshot delivery from real captures',
+    usage: 'osg deliver prepare --spec <file> --work <new-dir> [--dry-run] --offline | osg deliver finish --work <dir> --review <file> --out <new-dir>',
+    load: () => import('./commands/deliver.js'),
+  },
+  {
     name: 'video',
     summary: 'Render the App Store preview video',
     usage: 'osg video [--mode store-raw|store-text|styled] [--recording <file>] [--fps 30]',
@@ -272,7 +278,10 @@ async function main(): Promise<number> {
   }
 
   validateSafetyFlags(args);
-  const loaded = await loadConfig(flagString(args.flags, 'config'));
+  // Delivery specs are self-contained; do not execute project configuration.
+  const loaded = args.command === 'deliver'
+    ? { config: {}, file: null, root: process.cwd() }
+    : await loadConfig(flagString(args.flags, 'config'));
   const ctx = buildContext(args, loaded);
 
   try {
