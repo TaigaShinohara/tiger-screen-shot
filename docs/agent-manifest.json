@@ -4,7 +4,8 @@
   "schema_version": 1,
   "agent_level": 0,
   "target_level": 2,
-  "level_note": "Target scope: prepare, inspect and deliver store screenshots from supplied captures. End-to-end verification for all requested device layouts is still incomplete; app-wide L2 is not claimed.",
+  "screenshot_delivery_level": 2,
+  "level_note": "Screenshot delivery L2 verified with 12 Japanese iPhone, iPad and Android images, including native Capture on an iPad simulator and recovery after failed review. The app-wide level is reported separately.",
   "guide": "docs/AGENT_GUIDE.md",
   "operations": "docs/AGENT_OPERATIONS.md",
   "commands": [
@@ -40,6 +41,7 @@
   "agent_json_schema_version": 1,
   "dry_run": [
     "deliver create",
+    "deliver capture",
     "deliver prepare",
     "upload",
     "cache prune",
