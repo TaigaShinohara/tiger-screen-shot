@@ -53,6 +53,11 @@
     "tools_generated_from": "editor MCP tool definitions",
     "built_in_agent_only": [
       "restore_project_version",
+      "list_review_reply_templates",
+      "change_review_reply_template",
+      "list_review_tags",
+      "change_review_tag",
+      "set_store_review_tag",
       "create_website_draft",
       "publish_website_draft",
       "translate_website_draft",

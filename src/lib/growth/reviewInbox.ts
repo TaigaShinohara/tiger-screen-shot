@@ -13,7 +13,7 @@
 
 import { addDays, normalizeDay, today, type DayWindow } from './dates';
 import { csvCell } from './csv';
-import { announceGrowthChange, dropTagEverywhere, readMeta, writeMeta } from './db';
+import { announceGrowthChange, dropTagEverywhere, readMeta, REVIEW_TAGS_KEY, writeMeta } from './db';
 import { REVIEW_TOPIC_LABELS, reviewDay, topicsOf, type ReviewTopic } from './reviewTopics';
 import { listingLanguageName, territoryName, UNKNOWN_TERRITORY } from './territories';
 import { isPlayApp } from './stores';
@@ -46,13 +46,20 @@ export function tagColor(color: string): string {
 /** Tags most people start with, offered when there are none yet. */
 export const SUGGESTED_TAGS = ['Bug', 'Feature request', 'Question', 'Praise'];
 
-const TAGS_KEY = 'reviews:tags';
-const TEMPLATES_KEY = 'reviews:templates';
+const TAGS_KEY = REVIEW_TAGS_KEY;
+export const TEMPLATES_KEY = 'reviews:templates';
 export const MAX_TAG_LENGTH = 30;
 
 export async function readTags(): Promise<ReviewTag[]> {
   const tags = await readMeta<ReviewTag[]>(TAGS_KEY);
   return Array.isArray(tags) ? tags : [];
+}
+
+export async function readTagsStrict(): Promise<ReviewTag[]> {
+  const tags = await readMeta<unknown>(TAGS_KEY);
+  if (tags === undefined) return [];
+  if (!Array.isArray(tags)) throw new Error('The review tags could not be read.');
+  return tags as ReviewTag[];
 }
 
 export async function writeTags(tags: ReviewTag[]): Promise<void> {
@@ -105,6 +112,13 @@ function keptMark(mark: ReviewMark): ReviewMark | null {
 export async function readTemplates(): Promise<ReplyTemplate[]> {
   const templates = await readMeta<ReplyTemplate[]>(TEMPLATES_KEY);
   return Array.isArray(templates) ? templates : [];
+}
+
+export async function readTemplatesStrict(): Promise<ReplyTemplate[]> {
+  const templates = await readMeta<unknown>(TEMPLATES_KEY);
+  if (templates === undefined) return [];
+  if (!Array.isArray(templates)) throw new Error('The review reply templates could not be read.');
+  return templates as ReplyTemplate[];
 }
 
 export async function writeTemplates(templates: ReplyTemplate[]): Promise<void> {
