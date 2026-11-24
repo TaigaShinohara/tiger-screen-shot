@@ -14,6 +14,7 @@ function backend() {
   let creates = 0;
   let assetWrites = 0;
   let exists = true;
+  let failLookup = false;
   const assets: Array<{ getString: (key: string) => string; getInt: (key: string) => number }> = [];
   const fields: Record<string, unknown> = {
     owner: 'owner', project_id: 'local', updated: 'stamp', asset_bytes: 0, visibility: 'private', share_slug: '',
@@ -27,11 +28,15 @@ function backend() {
   };
   const tx = {
     save: (record: unknown) => {
-      if (record === row) { writes++; fields.updated = `saved-${writes}`; }
+      if (record === row) { writes++; exists = true; fields.updated = `saved-${writes}`; }
       else { assetWrites++; if (!assets.includes(record as typeof assets[number])) assets.push(record as typeof assets[number]); }
     },
     delete: () => {},
     findCollectionByNameOrId: (name: string) => name,
+    findRecordsByFilter: (_collection: string, filter: string, _sort: string, _limit: number, _offset: number, params: { u: string; p?: string }) => {
+      if (failLookup) throw new Error('lookup failed');
+      return exists && fields.owner === params.u && (!filter.includes('project_id') || fields.project_id === params.p) ? [row] : [];
+    },
   };
   const app = {
     runInTransaction: (callback: (value: typeof tx) => void) => callback(tx),
@@ -101,11 +106,40 @@ function backend() {
       request: { pathValue: () => 'record' }, json: (status: number, body: unknown) => ({ status, body }),
     });
   }
+  function createOnly(changes: Record<string, string> = {}) {
+    return routes.get('POST /api/openscreengen/projects/create-only')!({
+      form: { project_id: 'local', name: 'Test', manifest_assets: '[]', ...changes },
+      findUploadedFiles: () => [{ size: 2 }], json: (status: number, body: unknown) => ({ status, body }),
+    });
+  }
   return {
-    fields, request, upload, share, remove: () => { exists = false; },
+    fields, request, upload, share, createOnly, remove: () => { exists = false; }, failLookup: () => { failLookup = true; },
     writes: () => writes, creates: () => creates, assetWrites: () => assetWrites,
   };
 }
+
+test('create-only cloud saves never overwrite an existing copy or proceed on lookup failure', () => {
+  const existing = backend();
+  assert.equal(existing.createOnly().status, 409);
+  assert.equal(existing.writes(), 0);
+  const broken = backend();
+  broken.failLookup();
+  assert.equal(broken.createOnly().status, 500);
+  assert.equal(broken.writes(), 0);
+  const invalid = backend();
+  invalid.remove();
+  assert.equal(invalid.createOnly({ manifest_assets: '[{"id":"x","kind":"other"}]' }).status, 400);
+  assert.equal(invalid.writes(), 0);
+  const fresh = backend();
+  fresh.remove();
+  const result = fresh.createOnly({ manifest_assets: '[{"id":"image","kind":"media"}]' });
+  assert.equal(result.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.body)).missing, [{ id: 'image', kind: 'media' }]);
+  assert.equal(fresh.fields.visibility, 'private');
+  assert.equal(fresh.writes(), 1);
+  assert.equal(fresh.createOnly().status, 409);
+  assert.equal(fresh.writes(), 1);
+});
 
 test('conditional sharing rejects stale revisions and never rotates an already shared link', () => {
   for (const invalid of [{ projectId: '' }, { expectedUpdated: '' }, { on: 'true' }]) {

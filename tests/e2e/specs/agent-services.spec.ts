@@ -17,6 +17,8 @@ import {AccountAutoSyncer} from '@/lib/account/autoSync';
 import {deleteAccountLinkIfUnchanged,recordAccountSyncResult} from '@/lib/account/links';
 import {setDiscoverSession} from '@/lib/discover/session';
 import {setAgentCloudSharing} from '@/lib/cloud/agentShare';
+import {createAgentCloudCopy} from '@/lib/cloud/agentCreate';
+import {putCloudLinkIfAbsent} from '@/lib/cloud/links';
 import {collaborationStopPlan,planExistingCollaboration,setFirstCollaborationKey} from '@/lib/collab/agent';
 import {newDraft,factsFromProject} from '@/lib/website/content';
 import {writeSiteRow,readSiteRow} from '@/lib/website/store';
@@ -174,7 +176,29 @@ window.runAgentFixture=async()=>{
  let missingStamp=false; try{await resumeProjectAccountSync({projectId:'p1'});}catch{missingStamp=true}
  check(missingStamp,'resume requires a known remote stamp');
  setDiscoverSession({token:'secret-cloud-token',viewer:{id:'viewer-fixture',name:'Fixture'},provider:'github',accountId:'account-fixture'});
+ let createProject={id:'p-new',name:'New',artboards:[],openToken:1}, cloudSends=0;
+ const createPorts={readProject:()=>createProject,flush:async()=>{},available:()=>true,save:async(_id,options)=>{cloudSends++;check(options.createOnly && options.beforeCreate() && options.expectedDocument===JSON.stringify(['New',[]]),'cloud uses create-only');return{project:{},failedAssets:['missing']}}};
+ const cloudPlan=await createAgentCloudCopy({projectId:'p-new'},createPorts);
+ check(cloudPlan.dryRun && cloudPlan.sendsProject && cloudSends===0 && !JSON.stringify(cloudPlan).includes('secret'),'cloud preview is local');
+ await db.cloudLinks.put({projectId:'p-new',recordId:'other-record',accountId:'viewer-fixture',savedAt:new Date(1000),remoteUpdated:'r',visibility:'private',shareSlug:'',pendingAssets:[]});
+ let alreadyLinked=false;try{await createAgentCloudCopy({projectId:'p-new',dryRun:false,confirmed:true,expectedPlan:cloudPlan.expectedPlan},createPorts)}catch{alreadyLinked=true}
+ check(alreadyLinked && cloudSends===0,'existing cloud link prevents first save');
+ await db.cloudLinks.delete('p-new');
+ createProject={...createProject,name:'Changed'};
+ let staleCloud=false;try{await createAgentCloudCopy({projectId:'p-new',dryRun:false,confirmed:true,expectedPlan:cloudPlan.expectedPlan},createPorts)}catch{staleCloud=true}
+ check(staleCloud && cloudSends===0,'changed project prevents first cloud save');
+ createProject={...createProject,name:'New'};
+ const interruptedPorts={...createPorts,flush:async()=>{createProject={...createProject,openToken:2}}};
+ let changedDuringFlush=false;try{await createAgentCloudCopy({projectId:'p-new',dryRun:false,confirmed:true,expectedPlan:cloudPlan.expectedPlan},interruptedPorts)}catch{changedDuringFlush=true}
+ check(changedDuringFlush && cloudSends===0,'project change during flush prevents sending');
+ createProject={...createProject,openToken:1};
+ let uncertainCloud=false;try{await createAgentCloudCopy({projectId:'p-new',dryRun:false,confirmed:true,expectedPlan:cloudPlan.expectedPlan},{...createPorts,save:async()=>{throw new Error('network lost')}})}catch(error){uncertainCloud=String(error).includes('Check the cloud')}
+ check(uncertainCloud,'unknown cloud outcome requires inspection');
+ const createdCloud=await createAgentCloudCopy({projectId:'p-new',dryRun:false,confirmed:true,expectedPlan:cloudPlan.expectedPlan},createPorts);
+ check(createdCloud.saved && !createdCloud.complete && createdCloud.missingAssets===1 && cloudSends===1,'partial cloud copy reported');
  await db.cloudLinks.put({projectId:'p1',recordId:'secret-record',accountId:'viewer-fixture',savedAt:new Date(1000),remoteUpdated:'revision-1',visibility:'private',shareSlug:'',pendingAssets:[],collabKey:'secret-room'});
+ let refusedLinkOverwrite=false;try{await putCloudLinkIfAbsent('p1','viewer-fixture',{id:'other-record',updated:'new',visibility:'private'},[])}catch{refusedLinkOverwrite=true}
+ check(refusedLinkOverwrite && (await db.cloudLinks.get('p1')).recordId==='secret-record','first save cannot replace a newer local link');
  let sharingWrites=0;
  const sharePort={available:()=>true,setShared:async(_id,_project,revision,on)=>{sharingWrites++;check(revision==='revision-1' && on,'conditional sharing inputs');return{visibility:'link',shareSlug:'secret-link',updated:'revision-2'}}};
  const share=await setAgentCloudSharing({projectId:'p1',enabled:true},()=>false,sharePort);

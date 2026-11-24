@@ -131,6 +131,8 @@ export interface CloudSaveInput {
   /** Both fields are required for an update that must not create a cloud row. */
   expectedRecordId?: string;
   expectedUpdated?: string;
+  /** Create only; an older server must refuse instead of treating this as an upsert. */
+  createOnly?: boolean;
 }
 
 export interface CloudAssetUpload {
@@ -189,6 +191,7 @@ export const cloudApi = {
    */
   async saveProject(input: CloudSaveInput): Promise<CloudSaveResult> {
     requireSession();
+    if (input.createOnly && (input.expectedRecordId || input.expectedUpdated)) throw new CloudRequestError('A create-only save cannot update a cloud copy.', 400);
 
     const form = new FormData();
     form.set('project_id', input.projectId);
@@ -208,7 +211,7 @@ export const cloudApi = {
     // PocketBase renames every upload to its own hashed form on save.
     form.append('doc', input.doc, input.docEncoding === 'gzip' ? 'project.json.gz' : 'project.json');
 
-    const path = input.expectedRecordId
+    const path = input.createOnly ? '/api/openscreengen/projects/create-only' : input.expectedRecordId
       ? `/api/openscreengen/projects/${encodeURIComponent(input.expectedRecordId)}`
       : '/api/openscreengen/projects';
     const payload = await request<CloudSaveResult>(path, {

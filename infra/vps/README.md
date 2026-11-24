@@ -206,6 +206,7 @@ GET    /api/openscreengen/projects/:id                    auth    one, with its 
 DELETE /api/openscreengen/projects/:id                    auth    delete it and its blobs
 PUT    /api/openscreengen/projects/:id/share              auth    turn the link on or off
 PUT    /api/openscreengen/projects/:id/share-conditional  auth    change sharing only at the expected project revision
+POST   /api/openscreengen/projects/create-only  auth    create a private project only when that project ID does not already exist
 GET    /api/openscreengen/projects/:id/doc                auth    stream project.json
 POST   /api/openscreengen/projects/:id/assets             auth    upload one blob (multipart)
 GET    /api/openscreengen/projects/:id/assets/:assetId    auth    stream one blob

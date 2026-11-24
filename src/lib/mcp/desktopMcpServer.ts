@@ -506,6 +506,7 @@ export interface McpDesignApi {
   /** Saved projects, newest first (the Recent projects list). */
   listProjects(): Promise<McpProjectSummary[]>;
   listProjectVersions(projectId: string): Promise<Array<{ id: string; createdAt: string; label: string; kind: string; projectName: string; boards: number }>>;
+  createProjectCloudCopy(args: { projectId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }): Promise<unknown>;
   restoreProjectVersion(args: { projectId: string; versionId: string; dryRun?: unknown; confirmed?: unknown; expectedPlan?: unknown }, linksBlocked?: () => boolean): Promise<unknown>;
   listAiRuns(limit: number): Promise<Array<{ id: string; mode: string; status: string; startedAt: string; endedAt: string | null }>>;
   getWebsiteDraft(projectId: string): Promise<unknown>;
@@ -2910,6 +2911,16 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'create_project_cloud_copy',
+    description: "Preview or create the open project's first private cloud copy. Ask the user before sending project data or enabling later automatic saves. Defaults to dryRun; applying requires confirmation and expectedPlan. It needs a create-only server endpoint and never falls back to an overwrite. After an uncertain result check the cloud before retrying. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['projectId'] },
+    run: async (args, api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can create a cloud copy."), isError: true };
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.createProjectCloudCopy(args as Parameters<McpDesignApi['createProjectCloudCopy']>[0]));
+    },
+  },
+  {
     name: 'set_cloud_project_sharing',
     description: "Preview or change link sharing for the open project's already saved cloud copy. Enabling exposes that copy to anyone with the link; disabling revokes existing links. Ask the user before changing sharing. Defaults to dryRun and requires confirmation and expectedPlan. Requires a server that supports conditional sharing. Does not return the link. Only the app's own agents may use it.",
     inputSchema: { type: 'object', properties: {
@@ -3763,6 +3774,7 @@ const SLOW_TOOLS = new Set([
   'apply_store_listing_drafts',
   'publish_website_draft',
   'set_cloud_project_sharing',
+  'create_project_cloud_copy',
   'start_project_collaboration',
   'translate_website_draft',
   'send_prepared_store_review_reply',

@@ -34,6 +34,7 @@ import {
   getCloudLink,
   hasCloudAutoSaveConsent,
   putCloudLink,
+  putCloudLinkIfAbsent,
   setCloudLinkSharing,
 } from './links';
 import {
@@ -96,6 +97,10 @@ export interface SaveToCloudOptions {
    * place that decides which.
    */
   force?: boolean;
+  /** First-agent save only: a separate server route that cannot overwrite a copy. */
+  createOnly?: boolean;
+  expectedDocument?: string;
+  beforeCreate?: () => boolean;
 }
 
 export interface SaveToCloudResult {
@@ -116,11 +121,12 @@ export async function saveProjectToCloud(
   projectId: string,
   options: SaveToCloudOptions
 ): Promise<SaveToCloudResult> {
-  const { onProgress, force, origin } = options;
+  const { onProgress, force, origin, createOnly, expectedDocument, beforeCreate } = options;
 
   const accountId = cloudApi.accountId();
   if (!accountId) throw new CloudSignInRequiredError();
   if (origin !== 'manual' && origin !== 'auto') throw new CloudAutoSaveConsentRequiredError();
+  if (createOnly && (origin !== 'manual' || force || !expectedDocument || !beforeCreate)) throw new Error('A create-only save needs an unchanged local project.');
   const autoLink = origin === 'auto' ? await getCloudLink(projectId, accountId) : null;
   if (origin === 'auto' && !hasCloudAutoSaveConsent(autoLink, accountId)) {
     throw new CloudAutoSaveConsentRequiredError();
@@ -129,10 +135,14 @@ export async function saveProjectToCloud(
   const project = await db.projects.get(projectId);
   if (!project) throw new Error('This project is not in your local library yet.');
 
-  await assertNoUnexpectedRemote(projectId, accountId, origin === 'manual' && force === true, origin === 'auto');
+  if (createOnly) {
+    if (await db.cloudLinks.get(projectId)) throw new Error('This project already has a local cloud link.');
+    if (JSON.stringify([project.name, project.projectData]) !== expectedDocument) throw new Error('The project changed. Preview again.');
+  } else await assertNoUnexpectedRemote(projectId, accountId, origin === 'manual' && force === true, origin === 'auto');
 
   onProgress?.('Packaging project', 0);
   const bundle = await serializeProject(project, onProgress);
+  if (createOnly && bundle.missingMedia.length) throw new Error('Some project files are missing locally. Restore them before saving.');
 
   onProgress?.('Compressing', 0.4);
   const { blob: doc, encoding } = await packJson(JSON.stringify(bundle.manifest));
@@ -159,7 +169,12 @@ export async function saveProjectToCloud(
     docEncoding: encoding,
     manifestAssets,
     ...(autoLink ? { expectedRecordId: autoLink.recordId, expectedUpdated: autoLink.remoteUpdated } : {}),
+    ...(createOnly ? { createOnly: true } : {}),
   };
+  if (createOnly) {
+    const current = await db.projects.get(projectId);
+    if (!current || JSON.stringify([current.name, current.projectData]) !== expectedDocument || await db.cloudLinks.get(projectId) || !beforeCreate!()) throw new Error('The project or account changed. Preview again.');
+  }
   if (cloudApi.accountId() !== accountId) throw new CloudSignInRequiredError();
   let saved: CloudSaveResult;
   try {
@@ -180,6 +195,9 @@ export async function saveProjectToCloud(
     }
     throw error;
   }
+  if (createOnly && (!saved.project?.id || saved.project.projectId !== projectId || saved.project.visibility !== 'private' || !saved.project.updated)) {
+    throw new Error('The cloud returned an unexpected result. Check the cloud before retrying.');
+  }
 
   // Uploading only what the server asked for is the whole reason a re-save of a
   // project with a 90MB recording costs a few hundred kilobytes.
@@ -196,6 +214,7 @@ export async function saveProjectToCloud(
     if (!source) {
       // Referenced by the document but not in the bundle: the local blob was
       // cleared while the element kept pointing at it. Nothing to upload.
+      failedAssets.push(entry.id);
       continue;
     }
     onProgress?.(`Uploading file ${index + 1} of ${wanted.length}`, 0.5 + (0.5 * index) / wanted.length);
@@ -229,7 +248,8 @@ export async function saveProjectToCloud(
 
   const stored: CloudProject = { ...saved.project, updated };
   if (cloudApi.accountId() !== accountId) throw new CloudSignInRequiredError();
-  await putCloudLink(projectId, accountId, stored, failedAssets, origin === 'manual' ? 'manual-save' : undefined);
+  if (createOnly) await putCloudLinkIfAbsent(projectId, accountId, stored, failedAssets);
+  else await putCloudLink(projectId, accountId, stored, failedAssets, origin === 'manual' ? 'manual-save' : undefined);
   onProgress?.('Saved', 1);
   return { project: stored, failedAssets };
 }
