@@ -10,7 +10,7 @@ import { checkScreenshotCount, rulesetFor } from '../verify/rules.js';
 
 export interface Screen { id: string; boardId: string; input: string; inputFormat: string; inputLocale: string; claim: string; sha256: string }
 export interface Group { id: string; store: 'appstore' | 'play'; format: string; locale: string; projectLocale: string | null; project: string; projectSha256: string; screens: Screen[] }
-export interface DeliveryPlan { version: 1; name: string; spec: string; specSha256: string; groups: Group[] }
+export interface DeliveryPlan { version: 1; name: string; spec: string; specSha256: string; requestSource?: { file: string; sha256: string }; groups: Group[] }
 
 export function sha256(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex'); }
 export function fileHash(file: string): string { return sha256(fs.readFileSync(file)); }
@@ -45,7 +45,7 @@ function imageHash(value: string): string | null {
 }
 
 /** Reads only. Relative paths in the spec belong to the spec's directory. */
-export function readDeliveryPlan(specPath: string): DeliveryPlan {
+export function readDeliveryPlan(specPath: string, options: { draft?: boolean } = {}): DeliveryPlan {
   const spec = path.resolve(specPath);
   const raw = readRegular(spec);
   let data: any;
@@ -69,10 +69,20 @@ export function readDeliveryPlan(specPath: string): DeliveryPlan {
     destinations.add(destination);
     const projectLocale = group.projectLocale === null ? null : text(group.projectLocale, 'projectLocale (or null for the base canvas)');
     if (projectLocale && projectLocale.toLowerCase() !== locale.toLowerCase()) throw usageError(`Project and output languages differ for ${id}.`);
-    const project = path.resolve(root, text(group.project, 'project'));
-    const projectBytes = readRegular(project);
+    if (options.draft && (group.project !== undefined || projectLocale !== null)) throw usageError(`Draft ${id} must omit project and use projectLocale: null.`);
+    const project = options.draft ? '' : path.resolve(root, text(group.project, 'project'));
+    const projectBytes = options.draft ? Buffer.alloc(0) : readRegular(project);
     let document: any;
-    try { document = JSON.parse(projectBytes.toString('utf8')); } catch { throw usageError(`Invalid project: ${project}`); }
+    if (options.draft) {
+      if (!Array.isArray(group.screens)) throw usageError(`Missing screens for ${id}.`);
+      document = { projectData: group.screens.map((entry: any) => {
+        const input = path.resolve(root, text(entry?.input, 'input screenshot'));
+        const bytes = readRegular(input);
+        return { id: entry.id, elements: [{ imageSrc: `data:image/png;base64,${bytes.toString('base64')}` }] };
+      }) };
+    } else {
+      try { document = JSON.parse(projectBytes.toString('utf8')); } catch { throw usageError(`Invalid project: ${project}`); }
+    }
     if (!Array.isArray(document.projectData) || !Array.isArray(group.screens) || !group.screens.length) throw usageError(`Missing boards or screens for ${id}.`);
     const countFindings = checkScreenshotCount(group.screens.length, id, rulesetFor(group.store));
     if (countFindings.some((item) => item.level === 'fail')) throw usageError(countFindings[0].message);
@@ -84,7 +94,7 @@ export function readDeliveryPlan(specPath: string): DeliveryPlan {
     const inputHashes = new Set<string>();
     const screens: Screen[] = group.screens.map((entry: any) => {
       const screenId = safe(entry?.id, 'screen id');
-      const boardId = text(entry.boardId, 'boardId');
+      const boardId = options.draft ? screenId : text(entry.boardId, 'boardId');
       if (screenIds.has(screenId) || boardIds.has(boardId)) throw usageError(`Duplicate screen or board in ${id}.`);
       screenIds.add(screenId); boardIds.add(boardId);
       const input = path.resolve(root, text(entry.input, 'input screenshot'));
@@ -104,5 +114,12 @@ export function readDeliveryPlan(specPath: string): DeliveryPlan {
     });
     return { id, store: group.store, format, locale, projectLocale, project, projectSha256: sha256(projectBytes), screens };
   });
-  return { version: 1, name: text(data.name, 'delivery name'), spec, specSha256: sha256(raw), groups };
+  let requestSource: DeliveryPlan['requestSource'];
+  if (data.requestSource !== undefined) {
+    const file = path.resolve(root, text(data.requestSource?.file, 'request source'));
+    const expected = text(data.requestSource?.sha256, 'request source hash');
+    if (fileHash(file) !== expected) throw usageError('The original delivery request changed. Create the designs again.');
+    requestSource = { file, sha256: expected };
+  }
+  return { version: 1, name: text(data.name, 'delivery name'), spec, specSha256: sha256(raw), ...(requestSource ? { requestSource } : {}), groups };
 }

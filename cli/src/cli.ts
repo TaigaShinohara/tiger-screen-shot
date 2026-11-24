@@ -105,7 +105,7 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'deliver',
     summary: 'Prepare and review a screenshot delivery from real captures',
-    usage: 'osg deliver prepare --spec <file> --work <new-dir> [--dry-run] --offline | osg deliver finish --work <dir> --review <file> --out <new-dir>',
+    usage: 'osg deliver create|prepare --spec <file> --work <new-dir> [--dry-run] --offline | osg deliver finish --work <dir> --review <file> --out <new-dir>',
     load: () => import('./commands/deliver.js'),
   },
   {
