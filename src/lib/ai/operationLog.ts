@@ -217,10 +217,24 @@ export class OperationRecorder {
 /** Newest runs first. */
 export async function listOperations(limit = MAX_OPERATIONS): Promise<Operation[]> {
   try {
-    return await db.operations.orderBy('startedAt').reverse().limit(limit).toArray();
+    return await listOperationsStrict(limit);
   } catch {
     return [];
   }
+}
+
+export async function listOperationsStrict(limit = MAX_OPERATIONS): Promise<Operation[]> {
+  return db.operations.orderBy('startedAt').reverse().limit(limit).toArray();
+}
+
+export function summarizeOperation(run: Operation) {
+  return {
+    id: run.id,
+    mode: run.mode,
+    status: run.status,
+    startedAt: new Date(run.startedAt).toISOString(),
+    endedAt: run.endedAt === undefined ? null : new Date(run.endedAt).toISOString(),
+  };
 }
 
 export async function getOperation(id: string): Promise<Operation | undefined> {

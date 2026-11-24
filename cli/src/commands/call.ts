@@ -25,6 +25,7 @@ import { EXIT, OsgError, usageError } from '../errors.js';
 import { debug, dim, emit, fail, info, warn } from '../log.js';
 import { writeBackIdentity, type ProjectIdentity } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
+import { requireToolConfirmation } from '../safetyFlags.js';
 
 /** The project file on disk, by its own id and name. */
 interface ProjectFile extends ProjectIdentity {
@@ -41,6 +42,8 @@ export async function run(ctx: CommandContext): Promise<number> {
   if (!tool) {
     throw usageError('osg call needs a tool name', 'Try: osg call list_artboards, or osg call --list to see them all.');
   }
+
+  requireToolConfirmation([tool], flagBool(flags, 'yes'));
 
   const inline = ctx.args.positionals[1] ?? flagString(flags, 'args');
   const raw = inline ?? (await readStdin());

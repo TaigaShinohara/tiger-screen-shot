@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { summarizeOperation } from '@/lib/ai/operationLog';
 import {
   WEB_LINKS_OFF,
   createSerialMcpRunner,
@@ -60,6 +61,39 @@ test('an installation refuses design writes while project reads remain available
 const textOf = (response: unknown) => (response as CallResult).result?.content?.[0]?.text ?? '';
 const refused = (response: unknown) =>
   (response as CallResult).result?.isError === true && textOf(response) === WEB_LINKS_OFF;
+
+test('saved project versions are read-only and lookup failures are reported', async () => {
+  const rows = [{ id: 'v1', createdAt: '2026-11-24T00:00:00.000Z', label: 'Before edit', kind: 'safety', projectName: 'Example', boards: 2 }];
+  const api = {
+    mutationBlockReason: 'An update is being installed',
+    listProjectVersions: async (projectId: string) => {
+      if (projectId !== 'p1') throw new Error('Project not found');
+      return rows;
+    },
+  } as unknown as McpDesignApi;
+  const result = await handleMcpMessage(call('list_project_versions', { projectId: 'p1' }), api);
+  assert.notEqual((result as CallResult).result?.isError, true);
+  assert.deepEqual(JSON.parse(textOf(result)), rows);
+  const missing = await handleMcpMessage(call('list_project_versions', { projectId: 'missing' }), api);
+  assert.equal((missing as CallResult).result?.isError, true);
+  const invalid = await handleMcpMessage(call('list_project_versions', { projectId: '' }), api);
+  assert.equal((invalid as CallResult).result?.isError, true);
+});
+
+test('AI run summaries omit prompts, provider replies and error details', async () => {
+  const summary = summarizeOperation({
+    id: 'op1', mode: 'api', provider: 'example', providerLabel: 'Example',
+    instruction: 'private instruction', screenshotCount: 1, startedAt: 0,
+    status: 'error', errorCode: 'failed', errorMessage: 'private error',
+    entries: [{ t: 0, kind: 'message', label: 'reply', detail: 'private response', image: 'private image' }],
+  });
+  assert.deepEqual(summary, { id: 'op1', mode: 'api', status: 'error', startedAt: '1970-01-01T00:00:00.000Z', endedAt: null });
+  const api = { listAiRuns: async () => [summary] } as unknown as McpDesignApi;
+  const result = await handleMcpMessage(call('list_ai_runs', { limit: 1 }), api);
+  assert.deepEqual(JSON.parse(textOf(result)), [summary]);
+  const invalid = await handleMcpMessage(call('list_ai_runs', { limit: 61 }), api);
+  assert.equal((invalid as CallResult).result?.isError, true);
+});
 
 // set_background writes its colours into a CSS gradient as given.
 const INJECTED_GRADIENT = {

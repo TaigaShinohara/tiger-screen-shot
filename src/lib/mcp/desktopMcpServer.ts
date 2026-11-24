@@ -501,6 +501,8 @@ export interface McpDesignApi {
   }): Promise<McpProjectResult>;
   /** Saved projects, newest first (the Recent projects list). */
   listProjects(): Promise<McpProjectSummary[]>;
+  listProjectVersions(projectId: string): Promise<Array<{ id: string; createdAt: string; label: string; kind: string; projectName: string; boards: number }>>;
+  listAiRuns(limit: number): Promise<Array<{ id: string; mode: string; status: string; startedAt: string; endedAt: string | null }>>;
   /** Open a saved project in the editor. Null when the id is unknown. */
   openProject(projectId: string): Promise<McpProjectResult | null>;
   /**
@@ -2750,6 +2752,32 @@ const TOOLS: ToolDef[] = [
     run: async (_args, api) => textResult(await api.listProjects()),
   },
   {
+    name: 'list_project_versions',
+    description: 'List saved version metadata for a project. Version snapshots are not an execution history. Use list_projects for project IDs.',
+    inputSchema: {
+      type: 'object',
+      properties: { projectId: { type: 'string' } },
+      required: ['projectId'],
+    },
+    run: async (args, api) => {
+      if (typeof args.projectId !== 'string' || !args.projectId.trim()) return { ...textResult('Pass a project ID.'), isError: true };
+      return textResult(await api.listProjectVersions(args.projectId));
+    },
+  },
+  {
+    name: 'list_ai_runs',
+    description: 'List recent AI run IDs, times and statuses without prompts, responses, screenshots or error messages.',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'integer', minimum: 1, maximum: 60 } },
+    },
+    run: async (args, api) => {
+      const limit = args.limit ?? 20;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 60) return { ...textResult('Limit must be between 1 and 60.'), isError: true };
+      return textResult(await api.listAiRuns(limit));
+    },
+  },
+  {
     name: 'open_project',
     description: 'Open a saved project in the editor so you can inspect or edit its artboards. Use list_projects to find ids.',
     inputSchema: {
@@ -3494,6 +3522,8 @@ const READ_ONLY_TOOLS = new Set([
   'list_templates',
   'get_template',
   'list_projects',
+  'list_project_versions',
+  'list_ai_runs',
   'list_library',
   'list_fonts',
   'list_assets',

@@ -189,6 +189,9 @@ export async function run(ctx: CommandContext): Promise<number> {
   const store = resolveStore(ctx);
   const dryRun = flagBool(ctx.args.flags, 'dry-run', false);
   const replaceExisting = flagBool(ctx.args.flags, 'replace', false);
+  if (replaceExisting && !dryRun && !flagBool(ctx.args.flags, 'yes', false)) {
+    throw usageError('Replacing store images requires --yes.', 'Review the upload with --dry-run first.');
+  }
   const credentials = store === 'appstore' ? readAppStoreKey(ctx) : readPlayKey(ctx);
   // Said out loud on every run, because a user handing a publishing key to a
   // command line deserves to know where it goes. The global --help cannot carry

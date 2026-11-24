@@ -32,6 +32,8 @@ import {
   type ProjectIdentity,
 } from '../projectIdentity.js';
 import { canOpenAsProject } from '@/lib/projectCanvas';
+import { projectDataOf } from '../projectDocument.js';
+import { requireToolConfirmation } from '../safetyFlags.js';
 
 interface ToolCall {
   tool: string;
@@ -50,6 +52,7 @@ interface CallOutcome {
 export async function run(ctx: CommandContext): Promise<number> {
   const flags = ctx.args.flags;
   const calls = await collectCalls(ctx);
+  requireToolConfirmation(calls.map((call) => call.tool), flagBool(flags, 'yes'));
   const keepGoing = flagBool(flags, 'continue-on-error', false);
   const save = flagBool(flags, 'save', true);
 
@@ -314,8 +317,8 @@ function readProjectFile(file: string, configName: string | undefined): Omit<Loa
     return { id: `project_${Date.now()}`, name: fallbackName, data: parsed };
   }
   const record = (parsed ?? {}) as Record<string, unknown>;
-  const data = record.projectData;
-  if (!Array.isArray(data)) {
+  const data = projectDataOf(record);
+  if (!data) {
     throw usageError(`${file} has no projectData array`, 'A project file is {"id","name","timestamp","projectData"}.');
   }
   return {
