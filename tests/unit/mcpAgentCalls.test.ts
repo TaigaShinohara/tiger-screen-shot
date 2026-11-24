@@ -118,6 +118,14 @@ test('external clients cannot mutate Growth keywords', async () => {
   }
 });
 
+test('review reply templates remain private to built-in agents', async () => {
+  const { api } = fakeApi();
+  for (const name of ['list_review_reply_templates', 'change_review_reply_template', 'list_review_tags', 'change_review_tag', 'set_store_review_tag']) {
+    const result = await handleMcpMessage(call(name, { action: 'delete', id: 'template' }), api, { agent: false });
+    assert.equal((result as CallResult).result?.isError, true);
+  }
+});
+
 test('website and sync data are restricted to built-in agents', async () => {
   const { api, calls } = fakeApi();
   for (const name of ['get_website_draft', 'update_website_draft', 'get_project_sync_status', 'pause_project_account_sync']) {

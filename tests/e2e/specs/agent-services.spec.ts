@@ -6,6 +6,9 @@ const fixture = `
 import {getStoreCredentials,setAppStoreCredentials} from '@/lib/publish/credentials';
 import {readListing,readMeta,writeMeta,readReviews,writeReviews,readReviewMarks,updateReviewMarks,writeListing,readReviewReplyDraft,removeReviewReplyDraftIfSame} from '@/lib/growth/db';
 import {applyStoreListingDrafts,getKeywordTracking,trackStoreKeywords,untrackStoreKeyword,setStoreReviewDone,prepareStoreReviewReply,sendPreparedStoreReviewReply,getStoreListingDrafts,updateStoreListingDrafts} from '@/lib/growth/agentActions';
+import {changeReviewReplyTemplate,listReviewReplyTemplates} from '@/lib/growth/agentTemplates';
+import {writeTags,writeTemplates} from '@/lib/growth/reviewInbox';
+import {changeReviewTag,listReviewTags,setStoreReviewTag} from '@/lib/growth/agentReviewTags';
 import {setListingChangesStrict,discardListingDrafts,listingDraftsKey} from '@/lib/growth/listingDrafts';
 import {setSession} from '@/lib/account/store';
 import {db} from '@/database';
@@ -20,6 +23,24 @@ import {writeSiteRow,readSiteRow} from '@/lib/website/store';
 import {getWebsiteDraft,updateWebsiteDraft} from '@/lib/website/agent';
 window.runAgentFixture=async()=>{
  const check=(x,msg)=>{if(!x)throw new Error(msg)};
+ const templatePlan=await changeReviewReplyTemplate({action:'create',body:'Thanks, {name}!'});
+ check((await listReviewReplyTemplates()).templates.length===0 && !templatePlan.sendsToStore,'template preview is local');
+ let badTemplate=false;try{await changeReviewReplyTemplate({action:'create',body:'Different',dryRun:false,confirmed:true,expectedPlan:templatePlan.expectedPlan})}catch{badTemplate=true}
+ check(badTemplate,'template plan binds text');
+ const createdTemplate=await changeReviewReplyTemplate({action:'create',body:'Thanks, {name}!',dryRun:false,confirmed:true,expectedPlan:templatePlan.expectedPlan});
+ const savedTemplate=(await listReviewReplyTemplates()).templates[0];
+ check(savedTemplate.id===createdTemplate.id && savedTemplate.body==='Thanks, {name}!','template saved');
+ const updateTemplate=await changeReviewReplyTemplate({action:'update',id:createdTemplate.id,name:'Greetings'});
+ await writeTemplates([{...savedTemplate,createdAt:Date.parse(savedTemplate.createdAt),body:'Changed elsewhere'}]);
+ let staleTemplate=false;try{await changeReviewReplyTemplate({action:'update',id:createdTemplate.id,name:'Greetings',dryRun:false,confirmed:true,expectedPlan:updateTemplate.expectedPlan})}catch{staleTemplate=true}
+ check(staleTemplate,'template changed after preview is refused');
+ const deleteTemplate=await changeReviewReplyTemplate({action:'delete',id:createdTemplate.id});
+ await changeReviewReplyTemplate({action:'delete',id:createdTemplate.id,dryRun:false,confirmed:true,expectedPlan:deleteTemplate.expectedPlan});
+ check((await listReviewReplyTemplates()).templates.length===0,'template deleted');
+ await writeMeta('reviews:templates',{broken:true});
+ let brokenTemplates=false;try{await changeReviewReplyTemplate({action:'create',body:'Do not overwrite'})}catch{brokenTemplates=true}
+ check(brokenTemplates && (await readMeta('reviews:templates')).broken===true,'unreadable templates are not replaced');
+ await writeTemplates([]);
  setAppStoreCredentials({issuerId:'fixture-issuer',keyId:'fixture-key',privateKey:'fixture-only'});
  await writeMeta('apps:list:fixture-issuer:fixture-key',[{id:'123456',name:'Fixture',bundleId:'test.fixture'}]);
  const first=await trackStoreKeywords({appId:'123456',terms:[' Puzzle '],countries:['US']});
@@ -47,6 +68,32 @@ window.runAgentFixture=async()=>{
  check(wrongReview,'review plan mismatch');
  await setStoreReviewDone({appId:'123456',reviewId:'review-fixture',done:true,...review2,dryRun:false,confirmed:true});
  const marked=(await readReviewMarks(['123456']))[0]; check(!!marked.doneAt && marked.tags[0]==='tag','review mark and tags');
+ await writeMeta('reviews:tags',{broken:true});
+ let brokenTags=false;try{await listReviewTags()}catch{brokenTags=true}
+ check(brokenTags,'unreadable tags are not reported as empty');
+ await writeTags([{id:'tag',name:'Bug',color:'1'}]);
+ check((await listReviewTags()).tags[0].id==='tag','list review tags');
+ const tagPlan=await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:'tag',enabled:false});
+ let badTag=false;try{await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:'tag',enabled:true,dryRun:false,confirmed:true,expectedPlan:tagPlan.expectedPlan})}catch{badTag=true}
+ check(badTag,'tag plan binds target state');
+ await writeTags([{id:'tag',name:'Changed elsewhere',color:'1'}]);
+ let staleTag=false;try{await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:'tag',enabled:false,dryRun:false,confirmed:true,expectedPlan:tagPlan.expectedPlan})}catch{staleTag=true}
+ check(staleTag,'changed tag is refused');
+ const tagAgain=await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:'tag',enabled:false});
+ await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:'tag',enabled:false,dryRun:false,confirmed:true,expectedPlan:tagAgain.expectedPlan});
+ check((await readReviewMarks(['123456']))[0].tags.length===0 && !!(await readReviewMarks(['123456']))[0].doneAt,'tag removed without clearing done mark');
+ const newTagPlan=await changeReviewTag({action:'create',name:'Praise'});
+ const newTag=await changeReviewTag({action:'create',name:'Praise',dryRun:false,confirmed:true,expectedPlan:newTagPlan.expectedPlan});
+ const addTag=await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:newTag.id,enabled:true});
+ await setStoreReviewTag({appId:'123456',reviewId:'review-fixture',tagId:newTag.id,enabled:true,dryRun:false,confirmed:true,expectedPlan:addTag.expectedPlan});
+ const deleteTag=await changeReviewTag({action:'delete',id:newTag.id});
+ check(deleteTag.affectedReviews===1,'tag delete previews affected reviews');
+ await updateReviewMarks([{id:'review-fixture',appId:'123456'}],(mark)=>({...mark,updatedAt:mark.updatedAt+1}));
+ let staleDelete=false;try{await changeReviewTag({action:'delete',id:newTag.id,dryRun:false,confirmed:true,expectedPlan:deleteTag.expectedPlan})}catch{staleDelete=true}
+ check(staleDelete && (await listReviewTags()).tags.some((tag)=>tag.id===newTag.id),'changed review mark prevents tag deletion');
+ const deleteAgain=await changeReviewTag({action:'delete',id:newTag.id});
+ await changeReviewTag({action:'delete',id:newTag.id,dryRun:false,confirmed:true,expectedPlan:deleteAgain.expectedPlan});
+ check(!(await listReviewTags()).tags.some((tag)=>tag.id===newTag.id) && !!(await readReviewMarks(['123456']))[0].doneAt && !(await readReviewMarks(['123456']))[0].tags.includes(newTag.id),'tag and review marks are updated together');
  const replyPlan=await prepareStoreReviewReply({appId:'123456',reviewId:'review-fixture',text:'Thank you for the feedback.'});
  check(await readReviewReplyDraft('123456','review-fixture')===null,'reply preview wrote data');
  let wrongReply=false; try{await prepareStoreReviewReply({appId:'123456',reviewId:'review-fixture',text:'Different',...replyPlan,dryRun:false,confirmed:true});}catch{wrongReply=true}

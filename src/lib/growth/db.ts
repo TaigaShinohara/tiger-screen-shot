@@ -12,7 +12,10 @@
 
 import Dexie, { type Table } from 'dexie';
 import type { KeywordDay } from './keywords';
+import type { ReviewTag } from './types';
 import type { DayRecord, ListingSnapshot, RatingDay, ReviewMark, StoreReview, TerritoryRating, TimelineEvent } from './types';
+
+export const REVIEW_TAGS_KEY = 'reviews:tags';
 
 export interface MetaRow {
   key: string;
@@ -258,6 +261,59 @@ export async function updateExistingReviewMark(
   announceGrowthChange(appId);
 }
 
+/** The review, its mark and the selected tag must all still match the preview. */
+export async function updateReviewTagIfUnchanged(
+  appId: string, reviewId: string, tagId: string, expectedReview: string, expectedMark: string, expectedTag: string,
+  change: (mark: ReviewMark | undefined, review: { id: string; appId: string }) => ReviewMark | null
+): Promise<void> {
+  const database = db();
+  await database.transaction('rw', [database.reviews, database.reviewMarks, database.meta], async () => {
+    const review = await database.reviews.get(reviewId);
+    if (!review || review.appId !== appId || JSON.stringify(review) !== expectedReview) throw new Error('The review changed. Preview again.');
+    const row = await database.meta.get(REVIEW_TAGS_KEY);
+    const tags = Array.isArray(row?.value) ? row.value : [];
+    const matches = tags.filter((tag: { id?: unknown }) => tag?.id === tagId);
+    const mark = await database.reviewMarks.get(reviewId);
+    if (matches.length !== 1 || JSON.stringify(matches[0]) !== expectedTag || JSON.stringify(mark ?? null) !== expectedMark) throw new Error('The review mark or tag changed. Preview again.');
+    const next = change(mark, { id: reviewId, appId });
+    if (next) await database.reviewMarks.put(next);
+    else await database.reviewMarks.delete(reviewId);
+  });
+  announceGrowthChange(appId);
+}
+
+/** Snapshot a tag list and the marks a deletion would change in one read. */
+export async function readTagEditState(tagId: string | null): Promise<{ tags: ReviewTag[]; marks: ReviewMark[] }> {
+  const database = db();
+  return database.transaction('r', [database.meta, database.reviewMarks], async () => {
+    const row = await database.meta.get(REVIEW_TAGS_KEY);
+    if (row && !Array.isArray(row.value)) throw new Error('The review tags could not be read.');
+    const tags = (row?.value ?? []) as ReviewTag[];
+    const marks = tagId ? await database.reviewMarks.filter((mark) => mark.tags.includes(tagId)).toArray() : [];
+    return { tags, marks: marks.sort((a, b) => a.id.localeCompare(b.id)) };
+  });
+}
+
+/** Apply a reviewed tag edit atomically with its removal from all review marks. */
+export async function writeTagEditIfUnchanged(expected: { tags: ReviewTag[]; marks: ReviewMark[] }, nextTags: ReviewTag[], deleteId: string | null): Promise<void> {
+  const database = db();
+  await database.transaction('rw', [database.meta, database.reviewMarks], async () => {
+    const row = await database.meta.get(REVIEW_TAGS_KEY);
+    if (row && !Array.isArray(row.value)) throw new Error('The review tags could not be read.');
+    const tags = row?.value ?? [];
+    const marks = deleteId ? await database.reviewMarks.filter((mark) => mark.tags.includes(deleteId)).toArray() : [];
+    marks.sort((a, b) => a.id.localeCompare(b.id));
+    if (JSON.stringify([tags, marks]) !== JSON.stringify([expected.tags, expected.marks])) throw new Error('The tags or affected reviews changed. Preview again.');
+    await database.meta.put({ key: REVIEW_TAGS_KEY, value: nextTags });
+    for (const mark of marks) {
+      const remaining = mark.tags.filter((tag) => tag !== deleteId);
+      if (!remaining.length && !mark.doneAt) await database.reviewMarks.delete(mark.id);
+      else await database.reviewMarks.put({ ...mark, tags: remaining, updatedAt: Date.now() });
+    }
+  });
+  announceGrowthChange(null);
+}
+
 /** Take a tag off every review that has it, for deleting the tag. */
 export async function dropTagEverywhere(tagId: string): Promise<void> {
   const database = db();
@@ -309,6 +365,19 @@ export async function readMeta<T>(key: string): Promise<T | undefined> {
 
 export async function writeMeta(key: string, value: unknown): Promise<void> {
   await db().meta.put({ key, value });
+}
+
+/** Compare and replace an array in the same transaction, so another write cannot slip between the check and save. */
+export async function replaceMetaArrayIfUnchanged<T>(key: string, expected: T[], next: T[]): Promise<void> {
+  const database = db();
+  await database.transaction('rw', database.meta, async () => {
+    const row = await database.meta.get(key);
+    if (row && !Array.isArray(row.value)) throw new Error('The templates could not be read. Nothing was changed.');
+    const current = Array.isArray(row?.value) ? row.value : [];
+    if (JSON.stringify(current) !== JSON.stringify(expected)) throw new Error('The templates changed. Preview again.');
+    await database.meta.put({ key, value: next });
+  });
+  announceGrowthChange(null);
 }
 
 export async function deleteMeta(keys: string[]): Promise<void> {

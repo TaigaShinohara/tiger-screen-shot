@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/test';
 import type { TauriHttpRule } from '../fixtures/tauri-runtime';
+import type { TauriHarness } from '../fixtures/tauri';
 import { TEST_ACCOUNT_RULES, TEST_APP, TEST_KEY, connectTestAccount, gateOf, growthMeta, openGrowth, putGrowthRows, section } from '../helpers/growth';
 import { sampleRatings, sampleReviews } from '../../fixtures/growthSample';
 
@@ -27,6 +28,17 @@ const CLAUDE_READY = {
 const RIVAL_ID = '993090598';
 const SLACK = 'https://hooks.slack.com/services/T0E2E/B0E2E/e2etoken';
 const PLAY_PACKAGE = 'com.example.pebble';
+
+let agentCalls = 0;
+async function agentCall(tauri: TauriHarness, name: string, args: Record<string, unknown>, agent = true) {
+  const id = ++agentCalls;
+  const callId = `growth-review-agent-${id}`;
+  await tauri.emitFromBackend('abs-mcp-request', { callId, nonce: 'e2e-bridge-nonce', agent, message: { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } } });
+  const reply = async () => (await tauri.callsTo('abs_mcp_respond')).find((entry) => entry.args.callId === callId);
+  await expect.poll(async () => !!await reply(), { timeout: 30_000 }).toBe(true);
+  const response = (await reply())!.args.response as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  return { isError: response.result?.isError === true, text: response.result?.content?.[0]?.text ?? '' };
+}
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -289,6 +301,46 @@ test.describe('growth ratings and reviews', () => {
 
       await section(view, 'Replies').click();
       await expect(view.getByTestId('growth-templates')).toContainText('Used once');
+    });
+
+    test('the built-in agent manages a template visible in Replies', async ({ page, tauri }) => {
+      const view = await openApp(page);
+      await section(view, 'Replies').click();
+      const args = { action: 'create', name: 'Agent greeting', body: 'Thank you, {name}.' };
+      expect((await agentCall(tauri, 'change_review_reply_template', args, false)).isError).toBe(true);
+      const preview = await agentCall(tauri, 'change_review_reply_template', args);
+      expect(preview.isError, preview.text).toBe(false);
+      const expectedPlan = JSON.parse(preview.text).expectedPlan;
+      await expect(view.getByTestId('growth-templates')).not.toContainText('Agent greeting');
+      expect((await agentCall(tauri, 'change_review_reply_template', { ...args, dryRun: false, confirmed: true, expectedPlan })).isError).toBe(false);
+      await expect(view.getByTestId('growth-templates')).toContainText('Agent greeting');
+      const listed = await agentCall(tauri, 'list_review_reply_templates', {});
+      expect(JSON.parse(listed.text).templates[0].body).toBe('Thank you, {name}.');
+    });
+
+    test('the built-in agent adds a tag to a review and deletes it safely', async ({ page, tauri }) => {
+      const view = await openApp(page);
+      await section(view, 'Replies').click();
+      const create = { action: 'create', name: 'Agent tag' };
+      const preview = await agentCall(tauri, 'change_review_tag', create);
+      expect(preview.isError, preview.text).toBe(false);
+      const saved = await agentCall(tauri, 'change_review_tag', { ...create, dryRun: false, confirmed: true, expectedPlan: JSON.parse(preview.text).expectedPlan });
+      expect(saved.isError, saved.text).toBe(false);
+      const tagId = JSON.parse(saved.text).id;
+      await expect(view.getByRole('textbox', { name: 'Name of the tag Agent tag' })).toBeVisible();
+      const assignment = { appId: TEST_APP.id, reviewId: CRASH.id, tagId, enabled: true };
+      const tagPreview = await agentCall(tauri, 'set_store_review_tag', assignment);
+      expect(tagPreview.isError, tagPreview.text).toBe(false);
+      const tagged = await agentCall(tauri, 'set_store_review_tag', { ...assignment, dryRun: false, confirmed: true, expectedPlan: JSON.parse(tagPreview.text).expectedPlan });
+      expect(tagged.isError, tagged.text).toBe(false);
+      await section(view, 'Reviews').click();
+      await expect(view.locator(`[data-review-id="${CRASH.id}"]`)).toContainText('Agent tag');
+      const deletion = { action: 'delete', id: tagId };
+      const deletePreview = await agentCall(tauri, 'change_review_tag', deletion);
+      expect(JSON.parse(deletePreview.text).affectedReviews).toBe(1);
+      const deleted = await agentCall(tauri, 'change_review_tag', { ...deletion, dryRun: false, confirmed: true, expectedPlan: JSON.parse(deletePreview.text).expectedPlan });
+      expect(deleted.isError, deleted.text).toBe(false);
+      await expect(view.locator(`[data-review-id="${CRASH.id}"]`)).not.toContainText('Agent tag');
     });
 
     test('Every app puts the Google Play app’s reviews beside the App Store app’s, each with its own store', async ({ app, page }) => {

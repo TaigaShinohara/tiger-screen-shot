@@ -44,6 +44,8 @@ import {
   storeReviews,
 } from '@/lib/growth/agentTools';
 import { applyStoreListingDrafts, getKeywordTracking, getStoreListingDrafts, prepareStoreReviewReply, sendPreparedStoreReviewReply, setStoreReviewDone, trackStoreKeywords, untrackStoreKeyword, updateStoreListingDrafts } from '@/lib/growth/agentActions';
+import { changeReviewReplyTemplate, listReviewReplyTemplates } from '@/lib/growth/agentTemplates';
+import { changeReviewTag, listReviewTags, setStoreReviewTag } from '@/lib/growth/agentReviewTags';
 import type { AlignEdge, DistributeAxis } from '@/lib/elementGeometry';
 import {
   LIBRARY_KINDS,
@@ -3317,6 +3319,51 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'list_review_tags',
+    description: "List local review tags shared across apps. Only the app's own agents may read them.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async (_args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can read review tags."), isError: true };
+      return textResult(await listReviewTags());
+    },
+  },
+  {
+    name: 'change_review_tag',
+    description: "Preview or create, update or delete a shared local review tag. Deleting removes it from all marked reviews. Defaults to dryRun; applying requires confirmation and expectedPlan. Does not contact a store. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, id: { type: 'string' }, name: { type: 'string' }, color: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['action'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can change review tags."), isError: true };
+      return textResult(await changeReviewTag(args));
+    },
+  },
+  {
+    name: 'set_store_review_tag',
+    description: "Preview or add/remove an existing local tag on a review. Defaults to dryRun; applying requires confirmation and expectedPlan. Does not contact a store. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { appId: { type: 'string' }, reviewId: { type: 'string' }, tagId: { type: 'string' }, enabled: { type: 'boolean' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['appId', 'reviewId', 'tagId', 'enabled'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can change review tags."), isError: true };
+      return textResult(await setStoreReviewTag(args));
+    },
+  },
+  {
+    name: 'list_review_reply_templates',
+    description: "List locally saved review reply templates. These are shared across apps. Only the app's own agents may read them.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async (_args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can read review reply templates."), isError: true };
+      return textResult(await listReviewReplyTemplates());
+    },
+  },
+  {
+    name: 'change_review_reply_template',
+    description: "Preview or create, update or delete a local reply template shared across apps. Defaults to dryRun; applying requires confirmation and expectedPlan. Does not send a reply. Only the app's own agents may use it.",
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['create', 'update', 'delete'] }, id: { type: 'string' }, name: { type: 'string' }, body: { type: 'string' }, dryRun: { type: 'boolean' }, confirmed: { type: 'boolean' }, expectedPlan: { type: 'string' } }, required: ['action'] },
+    run: async (args, _api, ctx) => {
+      if (!ctx.agent) return { ...textResult("Only the app's own agents can change review reply templates."), isError: true };
+      return textResult(await changeReviewReplyTemplate(args));
+    },
+  },
+  {
     name: 'prepare_store_review_reply',
     description: "Preview or save a local reply draft for review in Growth. Does not send a reply. Defaults to dryRun; applying requires confirmation and expectedPlan from the preview. Only the app's own agents may write.",
     inputSchema: { type: 'object', properties: {
@@ -3793,6 +3840,8 @@ const READ_ONLY_TOOLS = new Set([
   'get_template',
   'list_projects',
   'list_project_versions',
+  'list_review_reply_templates',
+  'list_review_tags',
   'list_ai_runs',
   'get_website_draft',
   'get_project_sync_status',
