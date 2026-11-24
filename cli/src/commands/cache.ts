@@ -257,6 +257,9 @@ async function warmFonts(ctx: CommandContext): Promise<number> {
 
 function prune(ctx: CommandContext, manifest: AssetManifest): number {
   const dryRun = flagBool(ctx.args.flags, 'dry-run', false);
+  if (!dryRun && !flagBool(ctx.args.flags, 'yes', false)) {
+    throw usageError('Cache pruning requires --yes.', 'Review the files with `osg cache prune --dry-run` first.');
+  }
   const alsoFonts = flagBool(ctx.args.flags, 'fonts', false);
   const keep = new Set(Object.values(manifest.entries).map((entry) => entry.sha256));
 

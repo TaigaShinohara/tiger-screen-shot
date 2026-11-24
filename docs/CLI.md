@@ -141,11 +141,32 @@ One that sees `2` knows nothing was produced.
 Every failure is an `OsgError` carrying one actionable `fix` line, printed under
 the message. Never a stack trace, unless `--verbose`.
 
+The newer `status`, `list`, `get` and `history` commands have their own
+versioned JSON contract and use exit 3 for permission denied and 4 for a missing
+file or artboard. See [AGENT_GUIDE.md](AGENT_GUIDE.md) for their scope and codes.
+
 ## Commands
 
 Each command is one module exporting `run(ctx): Promise<number>`. None of them
 call `process.exit`, and none of them write stdout except through `emit`, which
 is what keeps `--json` parseable and lets `osg all` call the others in process.
+
+### `osg status`, `osg list`, `osg get`, `osg history`
+
+Inspect an exported project file and the local CLI result log without starting
+the editor or loading executable configuration. `list` returns artboard IDs;
+`get` reads one stored artboard. These commands always return JSON.
+
+```sh
+osg status --project ./osg/project.json
+osg list --project ./osg/project.json
+osg get '<artboard-id>' --project ./osg/project.json
+osg history --limit 20
+```
+
+They do not read desktop IndexedDB projects or GUI/MCP history. The history
+contains exit categories and no command arguments; see the agent guide for
+storage location, privacy and limitations.
 
 ### `osg init`
 
@@ -291,6 +312,7 @@ session, one browser, many mutations, in order.
 | `--stdin` | Read that same shape from stdin |
 | `--save` | Write the project file when the batch succeeds. Default on |
 | `--json` | Every result, in order |
+| `--yes` | Confirm the destructive tool calls listed in the agent guide |
 
 ```sh
 osg edit --tool set_background --args '{"artboardId":"a1","color":"#0b1120"}' \
@@ -319,6 +341,7 @@ osg call export_png --args '{"artboardId":"a1","scale":0.25,"save":true}'
 | --- | --- |
 | `--args <json>` | Arguments object |
 | `--tools` | List the 49 tools and their input schemas instead of calling one |
+| `--yes` | Confirm the destructive tool calls listed in the agent guide |
 
 ### `osg render`
 
@@ -487,7 +510,7 @@ config file for each. Shows the diff before writing.
 | --- | --- |
 | `osg cache warm` | Fetch every manifest asset now, so later runs need no network |
 | `osg cache info` | What is cached, how much of the manifest, how many bytes |
-| `osg cache prune` | Delete cached artwork and fonts |
+| `osg cache prune --yes` | Delete cached artwork and fonts; preview with `--dry-run` |
 
 | Flag | Effect |
 | --- | --- |

@@ -104,6 +104,7 @@ import { ExportDialog, type ExportSelection, type VideoExportRequest, type Video
 import { installHeadlessBridge, type HeadlessHost } from '@/lib/headless/bridge';
 import { canOpenAsProject, canvasStillHolds, sameDocument, type RenderedCanvas } from '@/lib/projectCanvas';
 import { createProjectSaveQueue, NO_PROJECT_SAVE_FAILURES, type ProjectSave } from '@/lib/projectSaveQueue';
+import { listOperationsStrict, summarizeOperation } from '@/lib/ai/operationLog';
 import { LocalSaveRecovery } from './LocalSaveRecovery';
 import { useProjectTabs } from '@/lib/tabs/useProjectTabs';
 import { summarizeProject } from '@/lib/tabs/summary';
@@ -354,6 +355,7 @@ import {
   deleteVersion,
   deleteVersionsForProject,
   listVersions,
+  listVersionsStrict,
   readVersion,
   saveVersion,
   type ProjectVersionMeta,
@@ -11730,6 +11732,22 @@ const generateRandomProjectName = (): string => {
         artboardCount: p.projectData?.length ?? 0,
         open: p.id === openId,
       }));
+    },
+    listProjectVersions: async (projectId) => {
+      if (!await db.projects.get(projectId)) throw new Error('Project not found. Call list_projects for valid IDs.');
+      const versions = await listVersionsStrict(projectId);
+      return versions.map((version) => ({
+        id: version.id,
+        createdAt: new Date(version.createdAt).toISOString(),
+        label: version.label,
+        kind: version.kind,
+        projectName: version.projectName,
+        boards: version.boards,
+      }));
+    },
+    listAiRuns: async (limit) => {
+      const runs = await listOperationsStrict(limit);
+      return runs.map(summarizeOperation);
     },
     openProject: async (projectId) => {
       // Parked in a tab: bring that tab back as it was, undo history and all,

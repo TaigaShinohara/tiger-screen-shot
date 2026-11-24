@@ -4,10 +4,14 @@
   "schema_version": 1,
   "agent_level": 0,
   "target_level": 2,
-  "level_note": "Partial L1–L3 capabilities; requirements for L1 are not complete.",
+  "level_note": "File inspection and CLI result history are available; desktop project and GUI/MCP history, other major workflows, and a common contract remain incomplete.",
   "guide": "docs/AGENT_GUIDE.md",
   "operations": "docs/AGENT_OPERATIONS.md",
   "commands": [
+    "status",
+    "list",
+    "get",
+    "history",
     "doctor",
     "init",
     "templates",
@@ -63,5 +67,19 @@
       "operation": "visual quality judgment",
       "reason": "automated store checks cannot assess appearance"
     }
+  ],
+  "versioned_json_commands": {
+    "schema_version": 1,
+    "commands": [
+      "status",
+      "list",
+      "get",
+      "history"
+    ]
+  },
+  "confirmation_required": [
+    "edit/call destructive tools listed in AGENT_OPERATIONS.md",
+    "cache prune",
+    "upload --replace"
   ]
 }

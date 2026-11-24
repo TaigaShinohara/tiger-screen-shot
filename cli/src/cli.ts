@@ -18,6 +18,7 @@ import { buildContext, type CommandContext } from './context.js';
 import { EXIT, OsgError } from './errors.js';
 import { configureOutput, info, fail, dim, bold, cyan, emit, isJsonMode } from './log.js';
 import { validateSafetyFlags } from './safetyFlags.js';
+import { recordCommand } from './history.js';
 
 interface CommandSpec {
   name: string;
@@ -27,6 +28,12 @@ interface CommandSpec {
 }
 
 const COMMANDS: CommandSpec[] = [
+  ...['status', 'list', 'get', 'history'].map((name) => ({
+    name,
+    summary: ({ status: 'Inspect the local project path', list: 'List artboards in a project file', get: 'Read an artboard by ID', history: 'Read CLI execution results' } as Record<string, string>)[name],
+    usage: ({ status: 'osg status [--project <path>]', list: 'osg list [--project <path>]', get: 'osg get <artboard-id> [--project <path>]', history: 'osg history [--limit <1-500>]' } as Record<string, string>)[name],
+    load: async () => ({ run: async (ctx: CommandContext) => (await import('./commands/inspect.js')).runInspection(ctx.args, packageVersion()) }),
+  })),
   {
     name: 'doctor',
     summary: 'Check everything this machine needs, with a fix for each failure',
@@ -72,13 +79,13 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'edit',
     summary: 'Run design tool calls against the open project',
-    usage: 'osg edit [--tool <name> --args <json>] [--script <file>] [--stdin]',
+    usage: 'osg edit [--tool <name> --args <json>] [--script <file>] [--stdin] [--yes]',
     load: () => import('./commands/edit.js'),
   },
   {
     name: 'call',
     summary: 'One design tool call, raw JSON on stdout',
-    usage: "osg call <tool> '<json>'   |   osg call --list",
+    usage: "osg call <tool> '<json>' [--yes]   |   osg call --list",
     load: () => import('./commands/call.js'),
   },
   {
@@ -120,7 +127,7 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'upload',
     summary: 'Push the rendered set to App Store Connect or Google Play',
-    usage: 'osg upload --store appstore|play [--locales <codes>] [--dry-run]',
+    usage: 'osg upload --store appstore|play [--locales <codes>] [--dry-run] [--replace --yes]',
     load: () => import('./commands/upload.js'),
   },
   {
@@ -138,7 +145,7 @@ const COMMANDS: CommandSpec[] = [
   {
     name: 'cache',
     summary: 'Warm, inspect or prune the artwork and font caches',
-    usage: 'osg cache warm|info|prune|seed [--tier <t>] [--fonts] [--from <dir>]',
+    usage: 'osg cache warm|info|prune|seed [--tier <t>] [--fonts] [--from <dir>] [--dry-run|--yes]',
     load: () => import('./commands/cache.js'),
   },
   {
@@ -187,6 +194,11 @@ function printHelp(commandName?: string): void {
     if (spec) {
       info(`\n  ${bold(spec.name)}  ${spec.summary}\n`);
       info(`  ${cyan(spec.usage)}\n`);
+      if (['status', 'list', 'get', 'history'].includes(spec.name)) {
+        info('  Returns versioned JSON. Project paths are relative to the current directory.');
+        info('  These commands do not load config or inspect desktop IndexedDB.\n');
+        return;
+      }
       info(`  ${dim('Global flags')}\n${GLOBAL_FLAGS.replace(/^/gm, '  ')}\n`);
       return;
     }
@@ -223,6 +235,10 @@ async function main(): Promise<number> {
     return EXIT.ok;
   }
 
+  if (['status', 'list', 'get', 'history'].includes(args.command)) {
+    return (await import('./commands/inspect.js')).runInspection(args, packageVersion());
+  }
+
   const spec = COMMANDS.find((entry) => entry.name === args.command);
   if (!spec) {
     fail(`Unknown command: ${args.command}`);
@@ -250,8 +266,14 @@ async function main(): Promise<number> {
   }
 }
 
+function recordResult(code: number): void {
+  try { recordCommand(process.argv.slice(2), code); }
+  catch { process.stderr.write('Warning: CLI history could not be recorded.\n'); }
+}
+
 main()
   .then((code) => {
+    recordResult(code);
     process.exitCode = code;
   })
   .catch((error: unknown) => {
@@ -259,6 +281,7 @@ main()
       fail(error.message);
       if (error.fix) info(`      ${dim(error.fix)}`);
       if (isJsonMode()) emit({ ok: false, error: error.message, fix: error.fix, ...error.detail });
+      recordResult(error.code);
       process.exitCode = error.code;
       return;
     }
@@ -267,5 +290,6 @@ main()
     if (process.env.OSG_DEBUG && error instanceof Error && error.stack) info(error.stack);
     else info(dim('Re-run with --verbose, or set OSG_DEBUG=1 for a stack trace.'));
     if (isJsonMode()) emit({ ok: false, error: message });
+    recordResult(EXIT.driver);
     process.exitCode = EXIT.driver;
   });

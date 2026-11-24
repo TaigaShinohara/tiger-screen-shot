@@ -122,13 +122,17 @@ export async function saveVersion(
 export async function listVersions(projectId: string | null): Promise<ProjectVersionMeta[]> {
   if (!projectId) return [];
   try {
-    const rows = await db.projectVersions.where('projectId').equals(projectId).toArray();
-    return rows
-      .map(({ doc: _doc, ...meta }) => meta)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return await listVersionsStrict(projectId);
   } catch {
     return [];
   }
+}
+
+export async function listVersionsStrict(projectId: string): Promise<ProjectVersionMeta[]> {
+  const rows = await db.projectVersions.where('projectId').equals(projectId).toArray();
+  return rows
+    .map(({ doc: _doc, ...meta }) => meta)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
 /** The document a version holds, ready to put on the canvas. */
