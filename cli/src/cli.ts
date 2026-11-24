@@ -17,6 +17,7 @@ import { loadConfig } from './config.js';
 import { buildContext, type CommandContext } from './context.js';
 import { EXIT, OsgError } from './errors.js';
 import { configureOutput, info, fail, dim, bold, cyan, emit, isJsonMode } from './log.js';
+import { validateSafetyFlags } from './safetyFlags.js';
 
 interface CommandSpec {
   name: string;
@@ -235,6 +236,7 @@ async function main(): Promise<number> {
     return EXIT.usage;
   }
 
+  validateSafetyFlags(args);
   const loaded = await loadConfig(flagString(args.flags, 'config'));
   const ctx = buildContext(args, loaded);
 
